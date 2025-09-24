@@ -66,7 +66,7 @@ zoom_factor = 3
 # =========== Tesseract OCR Setup ===========
 # --------------------------------------------
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-tesseract_config = "--oem 1 --psm 11 mar"
+tesseract_config = "--oem 1 --psm 11 -l mar"
 
 
 # -------------------------------------------
@@ -1335,7 +1335,7 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = [29]  # all pages
+                pages_to_iterate = list(range(20,21))  # all pages
 
                 # Resume from checkpoint
                 if pdf_name in checkpoint:
@@ -1383,12 +1383,40 @@ if __name__ == "__main__":
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
-                # Insert into SQL: DB = Municipality, Table = Ward
+
                 try:
-                    insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-                    print("📥 Data successfully inserted into SQL Server!")
+                    engine, table_name = insert_excel_to_sql(
+                        output_pdf_excel,
+                        exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                    )
+    
+                    if engine is not None and table_name is not None:
+                        print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
+
+                        # ---------------- Add Flags ----------------
+                        try:
+                            add_flags(engine, table_name)  # Use dynamic table name
+                            print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
+                        except Exception as flag_e:
+                            print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
+
                 except Exception as e:
                     print(f"❌ SQL insertion failed: {e}")
+
+                # Insert into SQL: DB = Municipality, Table = Ward
+                # try:
+                #     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
+                #     print("📥 Data successfully inserted into SQL Server!")
+                #     # ---------------- Add Flags ----------------
+                #     try:
+                #         from sqlalchemy import create_engine
+                #         engine = create_engine(connection_string, fast_executemany=True)  # Make sure your connection string is correct
+                #         add_flags(engine, "Ward")  # Replace "Ward" with your table name
+                #         print("✅ Flags added/updated successfully in SQL table!")
+                #     except Exception as flag_e:
+                #         print(f"❌ Failed to add/update flags: {flag_e}")
+                # except Exception as e:
+                #     print(f"❌ SQL insertion failed: {e}")
 
                 # Cleanup checkpoint + emergency
                 checkpoint = load_checkpoint()

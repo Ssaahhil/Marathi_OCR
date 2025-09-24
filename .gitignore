@@ -1,8 +1,10 @@
 \.venv
-\Input_Pdf
+Input_Pdf/
 \ocr_env
 \Output_Sample
 \testing_pdfs
 debug.log
 DraftList_Ward_28_KDMC.xlsx
 DraftList_Ward_29_KDMC.xlsx
+addition.xlsx
+english duplicate.py
