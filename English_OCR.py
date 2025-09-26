@@ -54,7 +54,7 @@ zoom_factor = 3
 # =========== Tesseract OCR Setup ===========
 # --------------------------------------------
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-tesseract_config = "--oem 1 --psm 11 mar"
+tesseract_config = "--oem 1 --psm 11 -l mar"
 
 
 # -------------------------------------------
@@ -719,15 +719,10 @@ def finalize_output(temp_excel, output_excel):
 
 
 column_order = [
-    "File_Name","New_Voter_ID","Municipal_Corporation", "Prabhag_No", "Prabhag_Name",
-    "Voter_ID", "Section_No", "Section_Name","List_Number","Page",
-    "Ac_no","EPIC_Number",
-    # "Age_Marathi", "Age_English",
-    # "Gender_Marathi", "Gender_English",
-    # "Booth_Name", "Booth_Address",
-     "Card_Index",
-    # "Marathi_Text","Cleaned_Text", 
-    "Paddle_Text",
+    "File_Name","Municipal_Corporation", "Prabhag_No", "Prabhag_Name","Section_No", "Section_Name","New_Voter_ID","EPIC_Number","Ac_no","List_Number",
+    "Voter_ID", "Page",
+    "Card_Index"
+
 ]
 
 
@@ -735,11 +730,11 @@ column_order = [
 # ---------------------------------------------------------------
 # ================ Main Page Processing Function ===============
 # ---------------------------------------------------------------
-def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
+def process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter):
     """
-    Process a single page and return voter-level details:
-    - EPIC, List No, AC No, Index No, Serial No
-    - Plus header info: Section_No, Section_Name, and file metadata
+    Process a single page and return:
+      - voter_details (list of dicts)
+      - updated serial_counter
     """
     import fitz  # PyMuPDF
     from PIL import Image
@@ -747,7 +742,6 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
     import os
 
     voter_details = []
-    serial_counter = 1
 
     # === Load PDF & Page ===
     doc = fitz.open(pdf_file)
@@ -772,7 +766,7 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
     if not card_coords_points:
         print(f"⚠️ No card boxes detected on page {page_num}")
         doc.close()
-        return []
+        return [], serial_counter   # ✅ return two values
 
     # === OCR Each Voter Card Box ===
     for card_index, (x1, y1, x2, y2) in enumerate(card_coords_points, start=1):
@@ -790,13 +784,13 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
             paddle_text, paddle_text, serial_counter, False
         )
 
-        # === Save Minimal Parsed Info ===
+        # === Save Parsed Info ===
         voter_details.append({
-            "EPIC_Number": correct_epic_number(epic_number) if epic_number else None,
+            "EPIC_Number": correct_epic_number(epic_number) if epic_number else "",
             "List_Number": list_number,
-            "AC_No": ac_no,
-            "Index_Number": index_number,
-            "Serial_Number": serial_number,
+            "Ac_no": ac_no,
+            "New_Voter_ID": index_number,
+            "Voter_ID": serial_number,
             "Section_No": section_no,
             "Section_Name": section_name,
             "Page": page_num,
@@ -808,7 +802,83 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
         })
 
     doc.close()
-    return voter_details
+    return voter_details, serial_counter   # ✅ always two values
+
+
+# def process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter):
+#     """
+#     Process a single page and return voter-level details:
+#     - EPIC, List No, AC No, Index No, Serial No
+#     - Plus header info: Section_No, Section_Name, and file metadata
+#     """
+#     import fitz  # PyMuPDF
+#     from PIL import Image
+#     import numpy as np
+#     import os
+
+#     voter_details = []
+#     serial_counter = 1
+
+#     # === Load PDF & Page ===
+#     doc = fitz.open(pdf_file)
+#     page = doc[page_num - 1]
+#     pix = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
+#     full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+#     # === Extract Page Header Info ===
+#     header_info = extract_header_info(full_img, top_margin=118.0, zoom_factor=zoom_factor)
+#     section_no = header_info.get("Section_No", "")
+#     section_name = header_info.get("Section_Name", "")
+
+#     print(f"📌 Page {page_num} Header → Section_No: {section_no} | Section_Name: {section_name}")
+
+#     # === Convert to NumPy Array ===
+#     pix_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+#     if pix_np.shape[2] == 4:
+#         pix_np = pix_np[:, :, :3]
+
+#     # === Detect Voter Card Boxes ===
+#     card_coords_points = find_card_boxes(pix_np)
+#     if not card_coords_points:
+#         print(f"⚠️ No card boxes detected on page {page_num}")
+#         doc.close()
+#         return []
+
+#     # === OCR Each Voter Card Box ===
+#     for card_index, (x1, y1, x2, y2) in enumerate(card_coords_points, start=1):
+#         card_img = full_img.crop((x1, y1, x2, y2))
+#         preprocessed_img = preprocess_image(card_img)
+
+#         result_paddle = ocr_paddle.ocr(np.array(preprocessed_img))
+#         paddle_text = "\n".join([line[1][0] for line in result_paddle[0]]) if result_paddle and result_paddle[0] else ""
+
+#         epic_number = extract_epic_number(paddle_text)
+#         list_number = extract_list_number(paddle_text)
+#         ac_no = extract_assembly_consitution_no(paddle_text)
+#         index_number = extract_index_number(paddle_text)
+#         serial_number, _, serial_counter = extract_serial_number(
+#             paddle_text, paddle_text, serial_counter, False
+#         )
+
+#         # === Save Minimal Parsed Info ===
+#         voter_details.append({
+#             "EPIC_Number": correct_epic_number(epic_number) if epic_number else None,
+#             "List_Number": list_number,
+#             "AC_No": ac_no,
+#             "Index_Number": index_number,
+#             "Serial_Number": serial_number,
+#             "Section_No": section_no,
+#             "Section_Name": section_name,
+#             "Page": page_num,
+#             "Card_Index": card_index,
+#             "Municipal_Corporation": pdf_header_info.get("Municipal_Corporation", ""),
+#             "Prabhag_No": pdf_header_info.get("Prabhag_No", ""),
+#             "Prabhag_Name": pdf_header_info.get("Prabhag_Name", ""),
+#             "File_Name": pdf_header_info.get("File_Name", os.path.basename(pdf_file)),
+#         })
+
+#     doc.close()
+#     return voter_details, serial_counter
 
 
 
@@ -823,127 +893,127 @@ def load_checkpoint():
             return json.load(f)
     return {}
 
-def save_checkpoint(pdf_name, page_num, temp_excel):
+def save_checkpoint(pdf_name, last_page, temp_excel, serial_counter):
     checkpoint = load_checkpoint()
     checkpoint[pdf_name] = {
-        "last_page": int(page_num),  # store page as int for JSON
-        "temp_excel": temp_excel
+        "last_page": last_page,
+        "temp_excel": temp_excel,
+        "serial_counter": serial_counter
     }
     with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
         json.dump(checkpoint, f, indent=2)
-    print(f"💾 Checkpoint saved for {pdf_name} at page {page_num}")
-    
+
     
 # ---------------------------------------------------------------
 # ================ SQL Server Insertion Helpers ===============
 # ---------------------------------------------------------------    
 
 # === Create SQLAlchemy Engine ===
-# def get_engine(db_name, user=DB_USER, password=DB_PASS):
-#     """
-#     Create SQLAlchemy engine using SQL Server Authentication.
-#     """
-#     conn_str = f"mssql+pyodbc://{user}:{password}@{DB_SERVER}/{db_name}?driver=ODBC+Driver+17+for+SQL+Server"
-#     return create_engine(conn_str, fast_executemany=True)
+def get_engine(db_name, user=DB_USER, password=DB_PASS):
+    """
+    Create SQLAlchemy engine using SQL Server Authentication.
+    """
+    conn_str = f"mssql+pyodbc://{user}:{password}@{DB_SERVER}/{db_name}?driver=ODBC+Driver+17+for+SQL+Server"
+    return create_engine(conn_str, fast_executemany=True)
 
-# # === Ensure Database Exists ===
-# def ensure_database_exists(db_name, user=DB_USER, password=DB_PASS):
-#     """
-#     Creates the database if it doesn't exist using raw pyodbc (autocommit=True).
-#     Avoids 'CREATE DATABASE inside transaction' error.
-#     """
-#     conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={DB_SERVER};UID={user};PWD={password};DATABASE=master"
-#     with pyodbc.connect(conn_str, autocommit=True) as conn:
-#         cursor = conn.cursor()
-#         cursor.execute(f"""
-#             IF NOT EXISTS (SELECT name FROM sys.databases WHERE name='{db_name}')
-#                 CREATE DATABASE [{db_name}]
-#         """)
-#         print(f"✅ Database ready: {db_name}")
+# === Ensure Database Exists ===
+def ensure_database_exists(db_name, user=DB_USER, password=DB_PASS):
+    """
+    Creates the database if it doesn't exist using raw pyodbc (autocommit=True).
+    Avoids 'CREATE DATABASE inside transaction' error.
+    """
+    conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={DB_SERVER};UID={user};PWD={password};DATABASE=master"
+    with pyodbc.connect(conn_str, autocommit=True) as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT name FROM sys.databases WHERE name='{db_name}')
+                CREATE DATABASE [{db_name}]
+        """)
+        print(f"✅ Database ready: {db_name}")
 
-# # === Clean + Validate Integer Columns ===
-# def enforce_integer_columns(df, int_cols):
-#     for col in int_cols:
-#         if col in df.columns:
-#             numeric_series = pd.to_numeric(df[col], errors="coerce")
-#             bad_mask = numeric_series.isna() & df[col].notna()
-#             if bad_mask.any():
-#                 bad_vals = df[col][bad_mask].unique()
-#                 raise ValueError(f"❌ Column '{col}' contains non-integer values: {bad_vals}")
-#             if not (numeric_series.dropna() == numeric_series.dropna().astype(int)).all():
-#                 bad_vals = df[col][numeric_series != numeric_series.astype(int)].unique()
-#                 raise ValueError(f"❌ Column '{col}' contains non-integer decimal values: {bad_vals}")
-#             df[col] = numeric_series.astype("Int64")
-#     return df
+# === Clean + Validate Integer Columns ===
+def enforce_integer_columns(df, int_cols):
+    for col in int_cols:
+        if col in df.columns:
+            numeric_series = pd.to_numeric(df[col], errors="coerce")
+            bad_mask = numeric_series.isna() & df[col].notna()
+            if bad_mask.any():
+                bad_vals = df[col][bad_mask].unique()
+                raise ValueError(f"❌ Column '{col}' contains non-integer values: {bad_vals}")
+            if not (numeric_series.dropna() == numeric_series.dropna().astype(int)).all():
+                bad_vals = df[col][numeric_series != numeric_series.astype(int)].unique()
+                raise ValueError(f"❌ Column '{col}' contains non-integer decimal values: {bad_vals}")
+            df[col] = numeric_series.astype("Int64")
+    return df
 
-# # === Extract Table Name from Excel/PDF File Name ===
-# def extract_table_name(excel_path):
-#     """
-#     Example: DraftList_Ward_28_KDMC.xlsx -> Ward_28
-#     """
-#     base = os.path.splitext(os.path.basename(excel_path))[0]
-#     ward_match = re.search(r"Ward[_ ]?(\d+)", base, re.IGNORECASE)
-#     return f"Ward_{ward_match.group(1)}" if ward_match else "Ward_Unknown"
+# === Extract Table Name from Excel/PDF File Name ===
+def extract_table_name(excel_path):
+    """
+    Example: DraftList_Ward_28_KDMC.xlsx -> Ward_28
+    """
+    base = os.path.splitext(os.path.basename(excel_path))[0]
+    ward_match = re.search(r"Ward[_ ]?(\d+)", base, re.IGNORECASE)
+    return f"Ward_{ward_match.group(1)}" if ward_match else "Ward_Unknown"
 
-# # === Insert Excel into SQL Server ===
-# def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
-#     """
-#     Reads an Excel file and inserts it into SQL Server.
-#     All text columns (Marathi included) are stored as NVARCHAR.
-#     Integer columns remain INT.
-#     Replaces the table if it already exists.
-#     Returns (engine, table_name) for further processing.
-#     """
-#     try:
-#         print(f"📂 Reading Excel file: {excel_path}")
-#         df = pd.read_excel(excel_path, dtype=str)
+# === Insert Excel into SQL Server ===
+def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
+    """
+    Reads an Excel file and inserts it into SQL Server.
+    All text columns (Marathi included) are stored as NVARCHAR.
+    Integer columns remain INT.
+    Replaces the table if it already exists.
+    Returns (engine, table_name) for further processing.
+    """
+    try:
+        print(f"📂 Reading Excel file: {excel_path}")
+        df = pd.read_excel(excel_path, dtype=str)
 
-#         if df.empty:
-#             print("⚠️ Excel file is empty, nothing to insert.")
-#             return None, None
+        if df.empty:
+            print("⚠️ Excel file is empty, nothing to insert.")
+            return None, None
 
-#         if exclude_cols:
-#             df = df.drop(columns=exclude_cols, errors="ignore")
+        if exclude_cols:
+            df = df.drop(columns=exclude_cols, errors="ignore")
 
-#         # Columns that must be integers
-#         int_cols = [
-#             "New_Voter_ID", "Voter_ID", "Section_No", "List_Number",
-#             "Page", "Card_Index", "Prabhag_No", "Ac_no", "Age_English"
-#         ]
-#         df = enforce_integer_columns(df, int_cols)
+        # Columns that must be integers
+        int_cols = [
+            "New_Voter_ID", "Voter_ID", "Section_No", "List_Number",
+            "Page", "Card_Index", "Prabhag_No", "Ac_no"
+        ]
+        df = enforce_integer_columns(df, int_cols)
 
-#         # Ensure database exists
-#         ensure_database_exists(db_name)
+        # Ensure database exists
+        ensure_database_exists(db_name)
 
-#         # Extract table name
-#         table_name = extract_table_name(excel_path)
+        # Extract table name
+        table_name = extract_table_name(excel_path)
 
-#         # Connect to database
-#         engine = get_engine(db_name)
+        # Connect to database
+        engine = get_engine(db_name)
 
-#         # Define SQLAlchemy dtype mapping
-#         sql_dtype = {}
-#         for col in df.columns:
-#             if col in int_cols:
-#                 sql_dtype[col] = types.INTEGER()
-#             else:
-#                 sql_dtype[col] = types.NVARCHAR(length=500)
+        # Define SQLAlchemy dtype mapping
+        sql_dtype = {}
+        for col in df.columns:
+            if col in int_cols:
+                sql_dtype[col] = types.INTEGER()
+            else:
+                sql_dtype[col] = types.NVARCHAR(length=500)
 
-#         # Insert into SQL Server (replace table if exists)
-#         df.to_sql(
-#             table_name,
-#             engine,
-#             if_exists="replace",
-#             index=False,
-#             dtype=sql_dtype
-#         )
+        # Insert into SQL Server (replace table if exists)
+        df.to_sql(
+            table_name,
+            engine,
+            if_exists="replace",
+            index=False,
+            dtype=sql_dtype
+        )
 
-#         print(f"✅ Inserted {len(df)} rows into table '{table_name}' in database '{db_name}'")
-#         return engine, table_name
+        print(f"✅ Inserted {len(df)} rows into table '{table_name}' in database '{db_name}'")
+        return engine, table_name
 
-#     except Exception as e:
-#         print(f"❌ SQL insertion failed for {excel_path}: {e}")
-#         return None, None
+    except Exception as e:
+        print(f"❌ SQL insertion failed for {excel_path}: {e}")
+        return None, None
     
 
 
@@ -1037,23 +1107,43 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1,11))  # all pages
+                pages_to_iterate = list(range(1, 14) ) # all pages
 
                 # Resume from checkpoint
+                # if pdf_name in checkpoint:
+                #     last_done = checkpoint[pdf_name]["last_page"]
+                #     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}")
+                #     old_emergency = checkpoint[pdf_name]["temp_excel"]
+                #     if os.path.exists(old_emergency):
+                #         df_existing = pd.read_excel(old_emergency, dtype=str)
+                #         pdf_voter_details.extend(df_existing.to_dict("records"))
+                #     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
+
                 if pdf_name in checkpoint:
                     last_done = checkpoint[pdf_name]["last_page"]
-                    print(f"🔄 Resuming {pdf_name} from page {last_done + 1}")
+                    serial_counter = checkpoint[pdf_name].get("serial_counter", 1)  # restore serial
+                    print(f"🔄 Resuming {pdf_name} from page {last_done + 1}, serial {serial_counter}")
                     old_emergency = checkpoint[pdf_name]["temp_excel"]
                     if os.path.exists(old_emergency):
                         df_existing = pd.read_excel(old_emergency, dtype=str)
+                        # normalize to fixed columns
+                        df_existing = df_existing.reindex(columns=column_order, fill_value="")
                         pdf_voter_details.extend(df_existing.to_dict("records"))
                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
+                else:
+                    serial_counter = 1
 
                 for page_num in pages_to_iterate:
-                    page_voters = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
+                    page_voters, serial_counter = process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter)
                     if page_voters:
                         pdf_voter_details.extend(page_voters)
-                        save_checkpoint(pdf_name, page_num, temp_excel)
+                        save_checkpoint(pdf_name, page_num, temp_excel, serial_counter)
+
+                # for page_num in pages_to_iterate:
+                #     page_voters = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
+                #     if page_voters:
+                #         pdf_voter_details.extend(page_voters)
+                #         save_checkpoint(pdf_name, page_num, temp_excel)
 
                     # Emergency save + checkpoint
                     # if pdf_voter_details:
@@ -1071,13 +1161,24 @@ if __name__ == "__main__":
                     #     print(f"💾 Emergency save at page {page_num}: {temp_excel}")
 
             # ---------------- Final Save + SQL Insert ----------------
+            # if pdf_voter_details:
+            #     df_pdf = pd.DataFrame(pdf_voter_details)
+            #     if column_order:
+            #         ordered_cols = [col for col in column_order if col in df_pdf.columns]
+            #         other_cols = [col for col in df_pdf.columns if col not in ordered_cols]
+            #         df_pdf = df_pdf[ordered_cols + other_cols]
+
+            #     for col in df_pdf.columns:
+            #         df_pdf[col] = df_pdf[col].astype(str)
+
+            #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+            #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
+            #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
+
+
             if pdf_voter_details:
                 df_pdf = pd.DataFrame(pdf_voter_details)
-                if column_order:
-                    ordered_cols = [col for col in column_order if col in df_pdf.columns]
-                    other_cols = [col for col in df_pdf.columns if col not in ordered_cols]
-                    df_pdf = df_pdf[ordered_cols + other_cols]
-
+                df_pdf = df_pdf.reindex(columns=column_order, fill_value="")  # ensure fixed set
                 for col in df_pdf.columns:
                     df_pdf[col] = df_pdf[col].astype(str)
 
@@ -1086,11 +1187,11 @@ if __name__ == "__main__":
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
                 # Insert into SQL: DB = Municipality, Table = Ward
-                # try:
-                #     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-                #     print("📥 Data successfully inserted into SQL Server!")
-                # except Exception as e:
-                #     print(f"❌ SQL insertion failed: {e}")
+                try:
+                    insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
+                    print("📥 Data successfully inserted into SQL Server!")
+                except Exception as e:
+                    print(f"❌ SQL insertion failed: {e}")
 
                 # Cleanup checkpoint + emergency
                 checkpoint = load_checkpoint()
@@ -1134,3 +1235,4 @@ if __name__ == "__main__":
     th, rem = divmod(total_elapsed, 3600)
     tm, ts = divmod(rem, 60)
     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
+    

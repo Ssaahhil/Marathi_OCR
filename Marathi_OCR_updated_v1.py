@@ -1409,6 +1409,18 @@ if __name__ == "__main__":
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
+            # if pdf_voter_details:
+            #     # Ensure consistent keys for all rows
+            #     normalized_records = []
+            #     for rec in pdf_voter_details:
+            #         norm = {col: str(rec.get(col, "")) for col in column_order}
+            #         normalized_records.append(norm)
+
+            #     df_pdf = pd.DataFrame(normalized_records)
+
+            #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+            #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
+            #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
                 try:
                     engine, table_name = insert_excel_to_sql(
