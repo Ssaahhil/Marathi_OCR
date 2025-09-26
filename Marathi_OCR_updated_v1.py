@@ -628,13 +628,38 @@ def extract_voter_name(text):
 # ---------------------------------------------------------------
 # =========== Split Marathi Full Name into First/Last ===========
 # ----------------------------------------------------------------
-def split_marathi_name(full_name):
+def split_relation_name(full_name):
     words = full_name.strip().split()
     first = words[1] if len(words) >= 2 else ""
     last = words[0] if words else ""
     # debug_log(f"[NAME_SPLIT] First={first}, Last={last}")
     return first, last
 
+def split_voter_name(full_name: str):
+    """
+    Split Marathi full name into First, Last, Middle.
+    Convention: <Last> <First> <Middle/Father's Name>
+    Example: 'पाटील सुरेश महादेव' -> First='सुरेश', Last='पाटील', Middle='महादेव'
+    """
+    words = full_name.strip().split()
+    
+    if not words:
+        return "", "", ""
+    
+    if len(words) == 1:
+        # Only one word: assume it's the first name
+        return words[0], "", ""
+    
+    if len(words) == 2:
+        # Two words: assume <Last> <First>
+        last, first = words
+        return first, last, ""
+    
+    # Three or more words: assume <Last> <First> <Middle...>
+    last, first, *middle = words
+    middle = " ".join(middle)  # Join remaining words in case of 4+
+    
+    return first, last, middle
 
 # --------------------------------------------------------
 # =========== Extract Relation Type and Name ============
@@ -766,9 +791,9 @@ def marathi_to_english_gender(normalized_gender: str) -> str:
 # ---------------------------------------------------------------------
 def parse_voter_card(marathi_text, cleaned_text):
     voter_name = extract_voter_name(marathi_text)
-    voter_first, voter_last = split_marathi_name(voter_name)
+    voter_first, voter_last, voter_middle = split_voter_name(voter_name)
     relation_type, relation_name = extract_relation_info(cleaned_text)
-    rel_first, rel_last = split_marathi_name(relation_name)
+    rel_first, rel_last = split_relation_name(relation_name)
     house_number = extract_house_number(cleaned_text)
     age_marathi, age_english = extract_age(cleaned_text)
     raw_gender, normalized_gender = extract_gender(cleaned_text)
@@ -777,6 +802,7 @@ def parse_voter_card(marathi_text, cleaned_text):
     return {
         "Voter_Name": voter_name,
         "Voter_First_Name": voter_first,
+        "Voter_Middle_Name": voter_middle,
         "Voter_Last_Name": voter_last,
         "Relation_Type": relation_type,
         "Relation_Name": relation_name,
@@ -964,7 +990,7 @@ column_order = [
     "File_Name","New_Voter_ID","Municipal_Corporation", "Prabhag_No", "Prabhag_Name",
     "Voter_ID", "Section_No", "Section_Name","List_Number","Page",
     "Ac_no","EPIC_Number",
-    "Voter_Name", "Voter_First_Name", "Voter_Last_Name",
+    "Voter_Name", "Voter_First_Name", "Voter_Middle_Name", "Voter_Last_Name",
     "Relation_Type", "Relation_Name", "Relation_First_Name", "Relation_Last_Name",
     "House_Number",
     "Age_Marathi", "Age_English",

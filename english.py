@@ -5,8 +5,8 @@ import re
 import pyodbc
 
 # === Config ===
-pdf_folder = r"C:\Users\ORNET91\Downloads\Yadi Details 2025\Yadi Details 2025\Addition List\Addition List - 188"
-excel_output = "Addition_143.xlsx"
+pdf_folder = r"C:\Users\ORNET91\Downloads\Yadi Details 2025\Yadi Details 2025\Updation Yadi\Updation List-188"
+excel_output = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Process_Modification\Modification_188.xlsx"
 conn_str = "DRIVER={ODBC Driver 17 for SQL Server};SERVER=WORKSTATION4;DATABASE=Supplement_Data;UID=sa;PWD=work$pace@04"
 
 # === Helper: Split Full Name into first, middle, last ===
@@ -112,7 +112,7 @@ try:
 
     for _, row in df.iterrows():   #Addition  ,  Deleted, Modification
         cursor.execute("""
-            INSERT INTO Addition ([State],[District],[Ac_No],[List_No],[Idcard_No],[Fullname],
+            INSERT INTO Modification ([State],[District],[Ac_No],[List_No],[Idcard_No],[Fullname],
                                         [Name],[Middlename],[Surname],
                                         [Month],[Year],[Status_Type])
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
