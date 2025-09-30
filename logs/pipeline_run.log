@@ -1,0 +1,10 @@
+2025-09-29 11:30:41,046 [INFO] OCR Controller service started. Visit /docs for API UI.
+2025-09-29 11:37:29,441 [INFO] Wrote .env with provided configuration
+2025-09-29 11:37:29,441 [INFO] Configuration saved in memory and .env written
+2025-09-29 11:38:20,454 [INFO] Starting pipeline subprocess: python Marathi_OCR_updated_v1.py
+2025-09-29 11:38:20,454 [INFO] Background thread launched to run pipeline
+Traceback (most recent call last):
+  File "D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Marathi_OCR_updated_v1.py", line 4, in <module>
+    import fitz
+ModuleNotFoundError: No module named 'fitz'
+2025-09-29 11:38:20,519 [ERROR] Pipeline subprocess exited with code 1
