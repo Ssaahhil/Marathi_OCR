@@ -1292,6 +1292,20 @@ DB_CREDENTIALS = {
     "ORNET96": {"user": "sa", "password": "manager","driver": "ODBC Driver 17 for SQL Server" }
 }
 
+def save_progress(records, columns, temp_excel_path):
+    df = pd.DataFrame(records)
+    if columns:
+        ordered_cols = [col for col in columns if col in df.columns]
+        other_cols = [col for col in df.columns if col not in ordered_cols]
+        df = df[ordered_cols + other_cols]
+    for col in df.columns:
+        df[col] = df[col].astype(str)
+    df.to_excel(temp_excel_path, index=False, engine="openpyxl")
+    print(f"💾 Emergency progress saved to {temp_excel_path}")
+
+# Your existing functions:
+# card_is_present(), extract_header_info(), process_page(), insert_excel_to_sql(), add_flags() etc.
+
 @app.post("/process-pdf/")
 async def process_pdf(
     pdf_folder: str = Query(..., description="Path to folder containing Marathi PDFs"),
@@ -1302,35 +1316,41 @@ async def process_pdf(
     sheet_name: str = Query("Sheet1", description="Sheet name in prefix mapping Excel file"),
     temp_dir: str = Query(..., description="Folder to save emergency temp Excel files"),
 ):
+    # Validate inputs
+    if not os.path.exists(pdf_folder):
+        raise HTTPException(status_code=400, detail=f"PDF folder not found: {pdf_folder}")
+    if not os.path.exists(prefix_file):
+        raise HTTPException(status_code=400, detail=f"Prefix file not found: {prefix_file}")
+    if db_server not in DB_CREDENTIALS:
+        raise HTTPException(status_code=400, detail=f"No credentials found for server: {db_server}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(temp_dir, exist_ok=True)
+
+    prefix_df = pd.read_excel(prefix_file, sheet_name=sheet_name)
+    db_config = DB_CREDENTIALS[db_server]
+
+    checkpoint = load_checkpoint()
+    generated_excels = []
+
+    pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
+
     try:
-        if not os.path.exists(pdf_folder):
-            raise HTTPException(status_code=400, detail=f"PDF folder not found: {pdf_folder}")
-        if not os.path.exists(prefix_file):
-            raise HTTPException(status_code=400, detail=f"Prefix file not found: {prefix_file}")
-
-        # Load prefix Excel sheet
-        prefix_df = pd.read_excel(prefix_file, sheet_name=sheet_name)
-
-        # Lookup DB credentials
-        if db_server not in DB_CREDENTIALS:
-            raise HTTPException(status_code=400, detail=f"No credentials found for server: {db_server}")
-        db_config = DB_CREDENTIALS[db_server]
-
-        pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
-        if not pdf_files:
-            raise HTTPException(status_code=404, detail="No PDF files found in folder.")
-
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(temp_dir, exist_ok=True)
-
-        generated_excels = []
-
         for pdf_file in pdf_files:
-            base_name = os.path.basename(pdf_file).replace(".pdf", "")
-            table_name = "_".join(base_name.split("_")[1:]) if "_" in base_name else base_name
-            all_records = []
+            pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
+            output_excel_path = os.path.join(output_dir, f"{pdf_name}.xlsx")
+            temp_excel_path = os.path.join(temp_dir, f"{pdf_name}_emergency.xlsx")
 
-            # ---------------- Extract PDF Header ----------------
+            # Skip if already processed
+            if os.path.exists(output_excel_path):
+                if pdf_name in checkpoint:
+                    del checkpoint[pdf_name]
+                    with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                        json.dump(checkpoint, f, indent=2)
+                print(f"✔️ Skipping already processed PDF: {pdf_name}")
+                continue
+
+            # Extract PDF Header info
             pdf_header_info = {}
             header_extracted = False
             try:
@@ -1338,7 +1358,6 @@ async def process_pdf(
                     for page_number in range(min(20, len(doc))):
                         page = doc[page_number]
                         pix_low = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
-                        from PIL import Image
                         img_low = Image.frombytes("RGB", [pix_low.width, pix_low.height], pix_low.samples)
                         if card_is_present(img_low):
                             pix_full = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
@@ -1352,63 +1371,244 @@ async def process_pdf(
                             }
                             header_extracted = True
                             break
-
                 if not header_extracted:
-                    print(f"⚠️ Header not found in {pdf_file}, continuing...")
-
+                    print(f"⚠️ No cards found in {pdf_name}. Skipping header.")
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Header extraction failed for {pdf_file}: {e}")
+                raise HTTPException(status_code=500, detail=f"Header extraction failed for {pdf_name}: {e}")
 
-            mc_name = pdf_header_info.get("Municipal_Corporation", "UNKNOWN")
-            prabhag_no = pdf_header_info.get("Prabhag_No", "UNKNOWN")
-            prabhag_name = pdf_header_info.get("Prabhag_Name", "UNKNOWN")
+            pdf_records = []
+            start_page = 1
+            if pdf_name in checkpoint:
+                last_page = checkpoint[pdf_name].get("last_page", 0)
+                old_temp_excel = checkpoint[pdf_name].get("temp_excel", "")
+                if old_temp_excel and os.path.exists(old_temp_excel):
+                    df_existing = pd.read_excel(old_temp_excel, dtype=str)
+                    pdf_records.extend(df_existing.to_dict("records"))
+                start_page = last_page + 1
+                print(f"🔄 Resuming {pdf_name} from page {start_page}")
 
-            print(f"[Header Info] {pdf_file} -> MC: {mc_name}, Prabhag: {prabhag_no}, Name: {prabhag_name}")
-
-            # ---------------- Process Pages ----------------
             try:
                 with fitz.open(pdf_file) as doc:
                     total_pages = len(doc)
-                    for page_num in range(1, 11):
+                    page_limit = min(13, total_pages)
+                    for page_num in range(start_page, page_limit + 1):
                         page_records = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
-                        for r in page_records:
-                            r["Municipal_Corporation"] = mc_name
-                            r["Prabhag_No"] = prabhag_no
-                            r["Prabhag_Name"] = prabhag_name
-                        all_records.extend(page_records)
+                        for rec in page_records:
+                            rec["Municipal_Corporation"] = pdf_header_info.get("Municipal_Corporation", "UNKNOWN")
+                            rec["Prabhag_No"] = pdf_header_info.get("Prabhag_No", "UNKNOWN")
+                            rec["Prabhag_Name"] = pdf_header_info.get("Prabhag_Name", "UNKNOWN")
+
+                        pdf_records.extend(page_records)
+
+                        # Save checkpoint JSON after each page
+                        checkpoint[pdf_name] = {
+                            "last_page": page_num,
+                            "temp_excel": temp_excel_path
+                        }
+                        with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                            json.dump(checkpoint, f, indent=2)
 
             except Exception as e:
-                print(f"⚠️ Page processing failed for {pdf_file}: {e}")
+                # On error, save emergency Excel + raise
+                if pdf_records:
+                    save_progress(pdf_records, column_order, temp_excel_path)
+                raise HTTPException(status_code=500, detail=f"Processing failed on {pdf_name}: {e}")
 
-            # ---------------- Save Excel ----------------
-            df = pd.DataFrame(all_records)
-            output_path = os.path.join(output_dir, f"{table_name}.xlsx")
-            temp_file = os.path.join(temp_dir, f"{table_name}_temp.xlsx")
+            # Save final Excel output
+            if pdf_records:
+                df_final = pd.DataFrame(pdf_records)
+                if column_order:
+                    ordered_cols = [col for col in column_order if col in df_final.columns]
+                    other_cols = [col for col in df_final.columns if col not in ordered_cols]
+                    df_final = df_final[ordered_cols + other_cols]
+                for col in df_final.columns:
+                    df_final[col] = df_final[col].astype(str)
+                df_final.to_excel(output_excel_path, index=False, engine="openpyxl")
+                generated_excels.append(output_excel_path)
+                print(f"📄 Saved extracted data to: {output_excel_path}")
 
-            save_progress(all_records, column_order, temp_file)
-            df.to_excel(output_path, index=False)
-            generated_excels.append(output_path)
+                # Insert into SQL DB
+                try:
+                    engine, table_name = insert_excel_to_sql(
+                        output_excel_path,
+                        db_server=db_server,
+                        db_name=db_name,
+                        user=db_config["user"],
+                        password=db_config["password"],
+                        driver=db_config["driver"],
+                        exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                    )
+                    if engine and table_name:
+                        print(f"📥 Data inserted to SQL table '{table_name}'")
+                        add_flags(engine, table_name)
+                        print(f"✅ Flags added in table '{table_name}'")
+                except Exception as e:
+                    print(f"❌ SQL insertion failed for {pdf_name}: {e}")
 
-            # ---------------- SQL Insertion ----------------
-            try:
-                engine, created_table = insert_excel_to_sql(
-                    output_path,
-                    db_server=db_server,
-                    db_name=db_name,
-                    user=db_config["user"],
-                    password=db_config["password"],
-                    driver=db_config["driver"],
-                    exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
-                )
-                if engine and created_table:
-                    add_flags(engine, created_table)
-            except Exception as sql_e:
-                print(f"⚠️ SQL insertion failed for {pdf_file}: {sql_e}")
+                # Cleanup checkpoint + temp emergency file on success
+                if pdf_name in checkpoint:
+                    temp_file = checkpoint[pdf_name].get("temp_excel")
+                    if temp_file and os.path.exists(temp_file):
+                        os.remove(temp_file)
+                        print(f"🗑️ Deleted emergency file: {temp_file}")
+                    del checkpoint[pdf_name]
+                    if checkpoint:
+                        with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                            json.dump(checkpoint, f, indent=2)
+                        print(f"✅ Updated checkpoint after finishing {pdf_name}")
+                    else:
+                        if os.path.exists(CHECKPOINT_FILE):
+                            os.remove(CHECKPOINT_FILE)
+                        print(f"🗑️ Deleted checkpoint file as all PDFs done")
+
+            else:
+                print(f"⚠️ No data extracted from {pdf_name}, skipping save.")
 
         return {"message": "Processing completed", "generated_excels": generated_excels}
 
+    except KeyboardInterrupt:
+        # Gracefully handle manual interruption
+        if 'pdf_records' in locals() and pdf_records:
+            save_progress(pdf_records, column_order, temp_excel_path)
+            checkpoint[pdf_name] = {
+                "last_page": checkpoint.get(pdf_name, {}).get("last_page", 0),
+                "temp_excel": temp_excel_path
+            }
+            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                json.dump(checkpoint, f, indent=2)
+            print(f"🛑 Processing interrupted manually. Progress saved for {pdf_name}")
+        raise HTTPException(status_code=500, detail="Processing interrupted manually.")
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Emergency save if possible
+        if 'pdf_records' in locals() and pdf_records:
+            save_progress(pdf_records, column_order, temp_excel_path)
+            checkpoint[pdf_name] = {
+                "last_page": checkpoint.get(pdf_name, {}).get("last_page", 0),
+                "temp_excel": temp_excel_path
+            }
+            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                json.dump(checkpoint, f, indent=2)
+            print(f"⚠️ Emergency save done for {pdf_name} at page {checkpoint[pdf_name]['last_page']}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+# @app.post("/process-pdf/")
+# async def process_pdf(
+#     pdf_folder: str = Query(..., description="Path to folder containing Marathi PDFs"),
+#     output_dir: str = Query(..., description="Folder to save Excel outputs"),
+#     db_server: str = Query(..., description="SQL Server host (key from config)"),
+#     db_name: str = Query(..., description="Target SQL Server database"),
+#     prefix_file: str = Query(..., description="Path to prefix mapping Excel file"),
+#     sheet_name: str = Query("Sheet1", description="Sheet name in prefix mapping Excel file"),
+#     temp_dir: str = Query(..., description="Folder to save emergency temp Excel files"),
+# ):
+#     try:
+#         if not os.path.exists(pdf_folder):
+#             raise HTTPException(status_code=400, detail=f"PDF folder not found: {pdf_folder}")
+#         if not os.path.exists(prefix_file):
+#             raise HTTPException(status_code=400, detail=f"Prefix file not found: {prefix_file}")
+
+#         # Load prefix Excel sheet
+#         prefix_df = pd.read_excel(prefix_file, sheet_name=sheet_name)
+
+#         # Lookup DB credentials
+#         if db_server not in DB_CREDENTIALS:
+#             raise HTTPException(status_code=400, detail=f"No credentials found for server: {db_server}")
+#         db_config = DB_CREDENTIALS[db_server]
+
+#         pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
+#         if not pdf_files:
+#             raise HTTPException(status_code=404, detail="No PDF files found in folder.")
+
+#         os.makedirs(output_dir, exist_ok=True)
+#         os.makedirs(temp_dir, exist_ok=True)
+
+#         generated_excels = []
+
+#         for pdf_file in pdf_files:
+#             base_name = os.path.basename(pdf_file).replace(".pdf", "")
+#             table_name = "_".join(base_name.split("_")[1:]) if "_" in base_name else base_name
+#             all_records = []
+
+#             # ---------------- Extract PDF Header ----------------
+#             pdf_header_info = {}
+#             header_extracted = False
+#             try:
+#                 with fitz.open(pdf_file) as doc:
+#                     for page_number in range(min(20, len(doc))):
+#                         page = doc[page_number]
+#                         pix_low = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
+#                         from PIL import Image
+#                         img_low = Image.frombytes("RGB", [pix_low.width, pix_low.height], pix_low.samples)
+#                         if card_is_present(img_low):
+#                             pix_full = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
+#                             img_full = Image.frombytes("RGB", [pix_full.width, pix_full.height], pix_full.samples)
+#                             hdr = extract_header_info(img_full, top_margin=118.0, zoom_factor=zoom_factor)
+#                             pdf_header_info = {
+#                                 "Municipal_Corporation": hdr.get("Municipal_Corporation", ""),
+#                                 "Prabhag_No": hdr.get("Prabhag_No", ""),
+#                                 "Prabhag_Name": hdr.get("Prabhag_Name", ""),
+#                                 "File_Name": os.path.basename(pdf_file)
+#                             }
+#                             header_extracted = True
+#                             break
+
+#                 if not header_extracted:
+#                     print(f"⚠️ Header not found in {pdf_file}, continuing...")
+
+#             except Exception as e:
+#                 raise HTTPException(status_code=500, detail=f"Header extraction failed for {pdf_file}: {e}")
+
+#             mc_name = pdf_header_info.get("Municipal_Corporation", "UNKNOWN")
+#             prabhag_no = pdf_header_info.get("Prabhag_No", "UNKNOWN")
+#             prabhag_name = pdf_header_info.get("Prabhag_Name", "UNKNOWN")
+
+#             print(f"[Header Info] {pdf_file} -> MC: {mc_name}, Prabhag: {prabhag_no}, Name: {prabhag_name}")
+
+#             # ---------------- Process Pages ----------------
+#             try:
+#                 with fitz.open(pdf_file) as doc:
+#                     total_pages = len(doc)
+#                     for page_num in range(1, 11):
+#                         page_records = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
+#                         for r in page_records:
+#                             r["Municipal_Corporation"] = mc_name
+#                             r["Prabhag_No"] = prabhag_no
+#                             r["Prabhag_Name"] = prabhag_name
+#                         all_records.extend(page_records)
+
+#             except Exception as e:
+#                 print(f"⚠️ Page processing failed for {pdf_file}: {e}")
+
+#             # ---------------- Save Excel ----------------
+#             df = pd.DataFrame(all_records)
+#             output_path = os.path.join(output_dir, f"{table_name}.xlsx")
+#             temp_file = os.path.join(temp_dir, f"{table_name}_temp.xlsx")
+
+#             save_progress(all_records, column_order, temp_file)
+#             df.to_excel(output_path, index=False)
+#             generated_excels.append(output_path)
+
+#             # ---------------- SQL Insertion ----------------
+#             try:
+#                 engine, created_table = insert_excel_to_sql(
+#                     output_path,
+#                     db_server=db_server,
+#                     db_name=db_name,
+#                     user=db_config["user"],
+#                     password=db_config["password"],
+#                     driver=db_config["driver"],
+#                     exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+#                 )
+#                 if engine and created_table:
+#                     add_flags(engine, created_table)
+#             except Exception as sql_e:
+#                 print(f"⚠️ SQL insertion failed for {pdf_file}: {sql_e}")
+
+#         return {"message": "Processing completed", "generated_excels": generated_excels}
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
