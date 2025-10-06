@@ -1,6 +1,7 @@
 \.venv
 Input_Pdf/
 \ocr_env
+\Output
 \Output_Sample
 \testing_pdfs
 debug.log
@@ -11,3 +12,11 @@ english duplicate.py
 Records.xlsx
 A_M_D_Extracter.py
 Insert_excel_to_sql.py
+\Marathi_Vidhansabha_OCR
+List_No_185.pdf
+\saved_cards
+\__pycache__
+checkpoint.json
+Marathi_Vidhansabha_OCR/Fixed_Box_Co_OCR.py
+Marathi_Vidhansabha_OCR/Output/MotherRollList_139_Part_42.xlsx
+Marathi_Vidhansabha_OCR/Output/MotherRollList_139_Part_43.xlsx

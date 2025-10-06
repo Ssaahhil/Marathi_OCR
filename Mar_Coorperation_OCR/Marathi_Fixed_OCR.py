@@ -19,7 +19,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse
 import uvicorn
 logging.getLogger("ppocr").setLevel(logging.WARNING)
-
+import warnings
 # --------------------------------------------
 # =========== SQL Serve DB Config =============
 # --------------------------------------------
@@ -28,7 +28,7 @@ DB_DRIVER = "ODBC Driver 17 for SQL Server"
 
 DB_USER = "sa"                  # SQL Server username
 DB_PASS = "manager"    # SQL Server password
-DB_NAME = "KDMC"                # Default database (can be overridden)
+DB_NAME = "Mh_139_2025"                # Default database (can be overridden)
 TABLE_NAME = "Ward_Unknown" 
 
 # Build connection string (ODBC)
@@ -70,7 +70,7 @@ zoom_factor = 3
 # =========== Tesseract OCR Setup ===========
 # --------------------------------------------
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-tesseract_config = "--oem 1 --psm 11 -l mar"
+tesseract_config = "--oem 1 --psm 3 -l mar"
 
 
 # -------------------------------------------
@@ -115,7 +115,7 @@ def debug_log(msg):
 # ========= Precompiled regex for Voter Name patterns =========
 # -------------------------------------------------------------
 VOTER_NAME_PATTERN = re.compile(
-        r"(?:मतदाराचे|उलदाराचे|टनदाराचे|ग्या|आ...|आ.|आ|मप हु|मट न्न|मटन|न ह|र छे|अर हे)\s*(?:पूर्ण|पुर्ण|पूण|उ|पूरण|पर्ण)\s*[：:;；]?\s*(.*?)(?=\s*(?:नांव|नाव|वडिलांचे\s*नाव|पतीचे\s*नाव|आईचे\s*नाव|घर\s*क्रमांक|वय|लिंग|$))",
+        r"(?:मतदाराचे|उलदाराचे|टनदाराचे|ग्या|आ...|आ.|आ|मप हु|मट न्न|मटन|न ह|र छे|अर हे|यत्वाराचे|)\s*(?:पूर्ण|पुर्ण|पूण|उ|पूरण|पर्ण)\s*[：:;；]?\s*(.*?)(?=\s*(?:नजदाराचे|मतदाराचे|नांव|नाव|वडिलांचे\s*नाव|पतीचे\s*नाव|आईचे\s*नाव|घर\s*क्रमांक|वय|लिंग|$))",
         re.IGNORECASE
     )
 
@@ -209,46 +209,98 @@ def preprocess_image(img: Image.Image,upscale_factor=3) -> Image.Image:
 # ------------------------------------------------------------
 # ============ Find Voter Card Boxes in Page Image ==========
 # ------------------------------------------------------------
-def find_card_boxes(pixmap_img, min_w=400, min_h=150, max_w=650, max_h=300, iou_thresh=0.3):
+# def find_card_boxes(pixmap_img, min_w=400, min_h=150, max_w=650, max_h=300, iou_thresh=0.3):
+#     """
+#     Detect voter card boxes from page image.
+#     - Filters duplicate inner/outer contours
+#     - Keeps only one bounding box per card
+#     """
+#     gray = cv2.cvtColor(pixmap_img, cv2.COLOR_RGB2GRAY)
+#     blur = cv2.GaussianBlur(gray, (5, 5), 0)
+#     edges = cv2.Canny(blur, 15, 150)
+
+#     contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+#     raw_boxes = []
+#     for cnt in contours:
+#         x, y, w, h = cv2.boundingRect(cnt)
+#         if min_w < w < max_w and min_h < h < max_h:
+#             raw_boxes.append((x, y, x + w, y + h))
+
+#     # Helper: IoU between two boxes
+#     def iou(boxA, boxB):
+#         xA = max(boxA[0], boxB[0])
+#         yA = max(boxA[1], boxB[1])
+#         xB = min(boxA[2], boxB[2])
+#         yB = min(boxA[3], boxB[3])
+#         interArea = max(0, xB - xA) * max(0, yB - yA)
+#         areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+#         areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+#         unionArea = float(areaA + areaB - interArea)
+#         return interArea / unionArea if unionArea > 0 else 0
+
+#     # Deduplicate: keep only one box per overlapping region
+#     deduped = []
+#     for b in sorted(raw_boxes, key=lambda b: (b[1], b[0])):  # scan row-wise
+#         if all(iou(b, d) < iou_thresh for d in deduped):
+#             deduped.append(b)
+
+#     # Sort again top-to-bottom, then left-to-right
+#     final_boxes = sorted(deduped, key=lambda b: (b[1] // 250, b[0]))
+
+#     return final_boxes
+
+def find_card_boxes(pixmap_img):
     """
-    Detect voter card boxes from page image.
-    - Filters duplicate inner/outer contours
-    - Keeps only one bounding box per card
+    Generate fixed grid boxes for voter cards using manual layout:
+    - Card width and height defined manually
+    - Separate upper/lower/side margins
+    - Custom spacing between cards
     """
-    gray = cv2.cvtColor(pixmap_img, cv2.COLOR_RGB2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 50, 150)
+    page_height, page_width = pixmap_img.shape[:2]
 
-    contours, _ = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    raw_boxes = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if min_w < w < max_w and min_h < h < max_h:
-            raw_boxes.append((x, y, x + w, y + h))
+    # Fixed PDF page dimensions in points
+    pdf_width, pdf_height = 595.0, 842.0
 
-    # Helper: IoU between two boxes
-    def iou(boxA, boxB):
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[2], boxB[2])
-        yB = min(boxA[3], boxB[3])
-        interArea = max(0, xB - xA) * max(0, yB - yA)
-        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-        unionArea = float(areaA + areaB - interArea)
-        return interArea / unionArea if unionArea > 0 else 0
+    # Scale factors (points → pixels)
+    scale_x = page_width / pdf_width
+    scale_y = page_height / pdf_height
 
-    # Deduplicate: keep only one box per overlapping region
-    deduped = []
-    for b in sorted(raw_boxes, key=lambda b: (b[1], b[0])):  # scan row-wise
-        if all(iou(b, d) < iou_thresh for d in deduped):
-            deduped.append(b)
+    # Manual layout settings (in PDF points)
+    num_rows = 9
+    num_cols = 3
 
-    # Sort again top-to-bottom, then left-to-right
-    final_boxes = sorted(deduped, key=lambda b: (b[1] // 250, b[0]))
+    card_width = 184.6        # Manual card width
+    card_height = 69         # Manual card height
 
-    return final_boxes
+    upper_margin = 82       # Top margin
+    lower_margin = 50        # Bottom margin
+    side_margin = 15         # Left and right margin
 
+    horizontal_spacing = 2  # Space between columns
+    vertical_spacing = 1.6    # Space between rows
+
+    # Total content height check (for safety)
+    total_height_needed = upper_margin + lower_margin + (num_rows * card_height) + ((num_rows - 1) * vertical_spacing)
+    if total_height_needed > pdf_height:
+        print(f"⚠️ Layout too tall for page: {total_height_needed} > {pdf_height}")
+
+    coordinates = []
+    for row in range(num_rows):
+        for col in range(num_cols):
+            x1 = side_margin + col * (card_width + horizontal_spacing)
+            y1 = upper_margin + row * (card_height + vertical_spacing)
+            x2 = x1 + card_width
+            y2 = y1 + card_height
+
+            # Scale to pixel space
+            coordinates.append((
+                int(x1 * scale_x),
+                int(y1 * scale_y),
+                int(x2 * scale_x),
+                int(y2 * scale_y)
+            ))
+
+    return coordinates
 
 # -----------------------------------------------------------
 # =========== Check if Voter Card is Present in Image ========
@@ -418,6 +470,65 @@ def extract_section_info(text):
     section_name = normalize_section_name(section_name)
     return section_no, section_name
 
+# def extract_section_info(text):
+#     section_no = ""
+#     section_lines = []
+
+#     lines = text.splitlines()
+#     collecting = False
+
+#     max_additional_lines = 10  # safety max lines after header
+#     additional_lines_collected = 0
+#     blank_line_count = 0
+
+#     voter_data_pattern = re.compile(r"^\d{1,3}(,\d{1,4})?\s")
+#     digit_pattern = re.compile(r"[0-9०-९]")  # ✅ matches English or Marathi digits
+
+#     def normalize_section_name(name: str) -> str:
+#         """Normalize OCR variants of 'NA' into 'NA'."""
+#         if not name or not name.strip():
+#             return ""
+
+#         cleaned = name.strip().lower().replace(" ", "").replace(".", "")
+
+#         # ✅ Add all known weird variants
+#         na_variants = {
+#             "na", "n/a", "एनए", "nil", "none", "---",
+#             "1९%", "1५/", "1९/", "1९»", "1९%", "1९", "10»", "1»", "1९०"
+#         }
+
+#         if cleaned in na_variants:
+#             return ""
+
+#         return name.strip()
+
+#     for idx, line in enumerate(lines):
+#         line_stripped = line.strip()
+
+#         if not collecting:
+#             # Find "यादी भाग क्रमांक" line
+#             if "यादी भाग क्रमांक" in line_stripped:
+#                 collecting = True
+#                 continue
+
+#         elif collecting:
+#             # Look for the section name line like "१- वालीवली गांव"
+#             match = re.match(r"([०१२३४५६७८९0-9]+)\s*[-–—]\s*(.+)", line_stripped)
+#             if match:
+#                 marathi_section_no = match.group(1).strip()
+#                 section_no = marathi_to_english_number(marathi_section_no)
+#                 section_name = match.group(2).strip()
+#                 section_name = normalize_section_name(section_name)
+#                 return section_no, section_name
+
+#             # If we don't get the expected pattern after N lines, stop
+#             additional_lines_collected += 1
+#             if additional_lines_collected >= max_additional_lines:
+#                 break
+
+#     # Fallback if no match found
+#     return section_no or "", ""
+
 
 # ------------------------------------------------------------------------
 # =============== Booth Name and Address Extractors ==========================
@@ -450,12 +561,13 @@ def extract_section_info(text):
 # --------------------------------------------------------------
 def extract_header_info(page_img, top_margin, zoom_factor):
     header_crop = page_img.crop((0, 0, page_img.width, int(top_margin * zoom_factor)))
+    header_crop.save("debug_header_crop.png")  
     header_text = pytesseract.image_to_string(header_crop, config="--psm 6 -l mar").strip()
     # debug_log(f"[HEADER RAW]\n{header_text}")
-    municipal = extract_municipal(header_text)
     section_no, section_name = extract_section_info(header_text)
     # booth_name = extract_booth_name(header_text)
     # booth_address = extract_booth_address(header_text)
+    municipal = extract_municipal(header_text)
     prabhag_no, prabhag_name = extract_prabhag_info(header_text)
     return {
         "Municipal_Corporation": municipal,
@@ -571,7 +683,7 @@ def extract_index_number(paddle_text):
 # -----------------------------------------------------
 # =========== Correct Name using Dictionary ============
 # -----------------------------------------------------
-with open("D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Mar_Coorperation_OCR\corrections.json", "r", encoding="utf-8") as f:
+with open("D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Marathi_Vidhansabha_OCR\corrections.json", "r", encoding="utf-8") as f:
     correction_dict = json.load(f)
 
 def correct_name_with_dict(name: str) -> str:
@@ -605,13 +717,37 @@ def clean_tesseract_text(text: str) -> str:
 # ------------------------------------------------------------------
 # =========== Extract Voter Name from Tesseract OCR Text ============
 # ------------------------------------------------------------------
+# def extract_voter_name(text):
+#     """Extract full voter name from Marathi OCR text (optimized)."""
+#     # Clean basic unwanted chars
+#     text = text.replace("\n", " ").replace("[", "").replace("]", "").replace("'", "")
+#     text = MULTISPACE_PATTERN.sub(" ", text).strip()
+
+#     # Match name
+#     match = VOTER_NAME_PATTERN.search(text)
+#     if not match:
+#         return ""
+
+#     main_text = match.group(1).strip()
+#     main_text = LEADING_JUNK_PATTERN.sub("", main_text)     # remove junk at start
+#     main_text = PUNCT_PATTERN.sub("", main_text).strip()    # remove Marathi punctuation
+#     main_text = MULTISPACE_PATTERN.sub(" ", main_text)      # collapse spaces
+
+#     # Drop numbers/Latin-only tokens
+#     words = [w for w in main_text.split() if not DIGIT_LATIN_PATTERN.match(w)]
+#     voter_name = " ".join(words[:4])  # keep first 3–4 words
+
+#     # Apply dictionary correction
+#     return correct_name_with_dict(voter_name)
+
+
 def extract_voter_name(text):
-    """Extract full voter name from Marathi OCR text (optimized)."""
-    # Clean basic unwanted chars
+    """Extract full voter name from Marathi OCR text (with digit stop logic)."""
+    # Clean unwanted chars
     text = text.replace("\n", " ").replace("[", "").replace("]", "").replace("'", "")
     text = MULTISPACE_PATTERN.sub(" ", text).strip()
 
-    # Match name
+    # Match name pattern
     match = VOTER_NAME_PATTERN.search(text)
     if not match:
         return ""
@@ -621,49 +757,22 @@ def extract_voter_name(text):
     main_text = PUNCT_PATTERN.sub("", main_text).strip()    # remove Marathi punctuation
     main_text = MULTISPACE_PATTERN.sub(" ", main_text)      # collapse spaces
 
-    # Drop numbers/Latin-only tokens
-    words = [w for w in main_text.split() if not DIGIT_LATIN_PATTERN.match(w)]
-    voter_name = " ".join(words[:4])  # keep first 3–4 words
+    # Split into words and stop at first word with digit
+    name_parts = []
+    for word in main_text.split():
+        if re.search(r"[0-9०-९]", word):  # Stop at any English or Marathi digit
+            break
+        if not DIGIT_LATIN_PATTERN.match(word):  # Avoid Latin-only junk
+            name_parts.append(word)
 
-    # Apply dictionary correction
+    voter_name = " ".join(name_parts[:4])  # Max 4 words
+
+    # Apply correction (if you have a dictionary correction method)
     return correct_name_with_dict(voter_name)
-
 
 # ---------------------------------------------------------------
 # =========== Split Marathi Full Name into First/Last ===========
 # ----------------------------------------------------------------
-# def split_relation_name(full_name):
-#     words = full_name.strip().split()
-#     first = words[1] if len(words) >= 2 else ""
-#     last = words[0] if words else ""
-#     # debug_log(f"[NAME_SPLIT] First={first}, Last={last}")
-#     return first, last
-
-# def split_voter_name(full_name: str):
-#     """
-#     Split Marathi full name into First, Last, Middle.
-#     Convention: <Last> <First> <Middle/Father's Name>
-#     Example: 'पाटील सुरेश महादेव' -> First='सुरेश', Last='पाटील', Middle='महादेव'
-#     """
-#     words = full_name.strip().split()
-    
-#     if not words:
-#         return "", "", ""
-    
-#     if len(words) == 1:
-#         # Only one word: assume it's the first name
-#         return words[0], "", ""
-    
-#     if len(words) == 2:
-#         # Two words: assume <Last> <First>
-#         last, first = words
-#         return first, last, ""
-    
-#     # Three or more words: assume <Last> <First> <Middle...>
-#     last, first, *middle = words
-#     middle = " ".join(middle)  # Join remaining words in case of 4+
-    
-#     return first, last, middle
 
 def split_voter_name(full_name: str):
     """
@@ -776,7 +885,7 @@ def limit_to_two_words(name):
 def extract_house_number(text):
     """Extract house number (Devanagari or English digits)."""
     match = HOUSE_NUMBER_PATTERN.search(text)
-    return marathi_to_english_number(match.group(1).strip()) if match else "NA"
+    return marathi_to_english_number(match.group(1).strip()) if match else ""
 
 
 # ------------------------------------------------------------
@@ -864,19 +973,19 @@ def parse_voter_card(marathi_text, cleaned_text):
     gender_english = marathi_to_english_gender(normalized_gender)
 
     return {
-        "Voter_Name": voter_name,
-        "Voter_First_Name": voter_first,
-        "Voter_Middle_Name": voter_middle,
-        "Voter_Last_Name": voter_last,
-        "Relation_Type": relation_type,
-        "Relation_Name": relation_name,
-        "Relation_First_Name": rel_first,
-        "Relation_Last_Name": rel_last,
+        "FullnameMar": voter_name,
+        "NameM": voter_first,
+        "MiddleNameM": voter_middle,
+        "SurnameM": voter_last,
+        "rln_type": relation_type,
+        "RLN_FM_NM_v1": relation_name,
+        "RLN_F_NM_V1": rel_first,
+        "RLN_L_NM_V1": rel_last,
         "House_Number": house_number,
-        "Age_Marathi": age_marathi,
-        "Age_English": age_english,
-        "Gender_Marathi": normalized_gender,  # normalized Marathi root word
-        "Gender_English": gender_english,     # English category
+        "AgeM": age_marathi,
+        "Age": age_english,
+        "GenderM": normalized_gender,  # normalized Marathi root word
+        "Gender": gender_english,     # English category
     }
 
 
@@ -1052,13 +1161,13 @@ def finalize_output(temp_excel, output_excel):
 
 column_order = [
     "File_Name","New_Voter_ID","Municipal_Corporation", "Prabhag_No", "Prabhag_Name",
-    "Voter_ID", "Section_No", "Section_Name","List_Number","Page",
+    "Voter_ID", "Section_No", "Section_Name","List_No","Page",
     "Ac_no","EPIC_Number",
-    "Voter_Name", "Voter_First_Name", "Voter_Middle_Name", "Voter_Last_Name",
-    "Relation_Type", "Relation_Name", "Relation_First_Name", "Relation_Last_Name",
+    "FullnameMar", "NameM", "MiddleNameM", "SurnameM",
+    "rln_type", "RLN_FM_NM_v1", "RLN_F_NM_V1", "RLN_L_NM_V1",
     "House_Number",
-    "Age_Marathi", "Age_English",
-    "Gender_Marathi", "Gender_English",
+    "AgeM", "Age",
+    "GenderM", "Gender",
     # "Booth_Name", "Booth_Address",
      "Card_Index",
     "Marathi_Text","Cleaned_Text", "Paddle_Text",
@@ -1068,52 +1177,89 @@ column_order = [
 # ---------------------------------------------------------------
 # ================ Main Page Processing Function ===============
 # ---------------------------------------------------------------
-def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
+
+def process_page(pdf_file, page_num, zoom_factor, pdf_header_info=None, save_cards_dir=None):
     """
-    Process a single page and return parsed voter rows.
-    Now also attaches Municipal/Prabhag/File_Name per row directly.
+    Process a single PDF page:
+    - Rasterize page with zoom factor
+    - Detect voter card bounding boxes using find_card_boxes
+    - OCR each detected card and extract relevant info
+    - Attach page-level section info extracted from the top margin
+    - Save cropped card images if save_cards_dir is provided
     """
     voter_details = []
     serial_counter = 1
 
-    # Open page
+    import fitz  # PyMuPDF
     doc = fitz.open(pdf_file)
     page = doc[page_num - 1]
+
+    # Render page pixmap at desired zoom
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
-    full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-    # === Extract header info (includes Section_No / Section_Name) ===
-    header_info = extract_header_info(full_img, top_margin=118.0, zoom_factor=zoom_factor)
-
-    section_no = header_info["Section_No"]
-    section_name = header_info["Section_Name"]
-    raw_header = header_info["Raw_Header_Text"]
-
-    print(f"📌 Page {page_num} Header → Section_No: {section_no} | Section_Name: {section_name}")
-
-    # Convert to numpy
+    # Convert pixmap to numpy array (H x W x C)
     pix_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
     if pix_np.shape[2] == 4:
         pix_np = pix_np[:, :, :3]
 
-    # Detect voter card boxes
-    card_coords_points = find_card_boxes(pix_np)
+    print(f"[process_page] Page {page_num} image size: width={pix.width}, height={pix.height}")
+
+    if pix.width is None or pix.height is None:
+        print(f"⚠️ Invalid page dimensions for page {page_num}, skipping...")
+        doc.close()
+        return []
+
+    # Convert full pixmap to PIL Image for cropping
+    full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+    # 🔍 Extract Section Info from Top Header Area of the Page
+    header_crop_height = int(118 * zoom_factor)
+    header_crop = full_img.crop((0, 0, full_img.width, header_crop_height))
+    header_text = pytesseract.image_to_string(header_crop, config="--psm 6 -l mar").strip()
+    municipal = extract_municipal(header_text)
+    prabhag_no, prabhag_name = extract_prabhag_info(header_text)
+    section_no, section_name = extract_section_info(header_text)
+
+
+    # # (Optional) Save debug header image
+    debug_filename = f"debug_header_page{page_num}.png"
+    header_crop.save(debug_filename)
+    print(f"🖼️ Saved debug header crop: {debug_filename}")
+    print(f"[Header Page {page_num}] Section_No: {section_no}, Section_Name: {section_name}")
+
+    try:
+        card_coords_points = find_card_boxes(pix_np)
+    except Exception as e:
+        print(f"⚠️ Error during card box detection on page {page_num}: {e}")
+        doc.close()
+        return []
+
     if not card_coords_points:
         print(f"⚠️ No card boxes detected on page {page_num}")
         doc.close()
         return []
 
-    # OCR each voter card
+    if save_cards_dir:
+        os.makedirs(save_cards_dir, exist_ok=True)
+
     for card_index, (x1, y1, x2, y2) in enumerate(card_coords_points, start=1):
         card_img = full_img.crop((x1, y1, x2, y2))
 
+        if save_cards_dir:
+            card_filename = os.path.join(
+                save_cards_dir,
+                f"{os.path.splitext(os.path.basename(pdf_file))[0]}_page{page_num}_card{card_index}.png"
+            )
+            card_img.save(card_filename)
+            print(f"🖼️ Saved card image: {card_filename}")
+
+        # Preprocess + OCR
         preprocessed_img = preprocess_image(card_img)
         marathi_text = pytesseract.image_to_string(preprocessed_img, config=tesseract_config).strip()
-        if not marathi_text.strip():
+        if not marathi_text:
             continue
 
         cleaned_text = clean_tesseract_text(marathi_text)
-
         result_paddle = ocr_paddle.ocr(np.array(preprocessed_img))
         paddle_text = "\n".join([line[1][0] for line in result_paddle[0]]) if result_paddle and result_paddle[0] else ""
 
@@ -1137,25 +1283,24 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
             "Card_Index": card_index,
             "Marathi_Text": marathi_text,
             "Cleaned_Text": cleaned_text,
-            "Voter_Name": voter_name,
+            "FullnameMar": voter_name,
             "Paddle_Text": paddle_text,
-            "List_Number": list_number,
+            "List_No": list_number,
             "Ac_no": ac_no,
-            # ✅ Always attach section info
             "Section_No": section_no,
             "Section_Name": section_name,
-            "Raw_Header_Text": raw_header,
-            # ✅ Also attach PDF-level header info here (new change)
-            "Municipal_Corporation": pdf_header_info.get("Municipal_Corporation", ""),
-            "Prabhag_No": pdf_header_info.get("Prabhag_No", ""),
-            "Prabhag_Name": pdf_header_info.get("Prabhag_Name", ""),
-            "File_Name": pdf_header_info.get("File_Name", os.path.basename(pdf_file)),
+            "Raw_Header_Text": header_text,
+            "Municipal_Corporation": municipal,
+            "Prabhag_No": prabhag_no,
+            "Prabhag_Name": prabhag_name,
+            "File_Name": os.path.basename(pdf_file),
         })
 
         voter_details.append(parsed)
 
     doc.close()
     return voter_details
+
 
 # ---------------------------------------------------------------
 # ================ Checkpointing Helpers ===============    
@@ -1231,13 +1376,78 @@ def extract_table_name(excel_path):
     return f"Ward_{ward_match.group(1)}" if ward_match else "Ward_Unknown"
 
 # === Insert Excel into SQL Server ===
-def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
+# def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
+#     """
+#     Reads an Excel file and inserts it into SQL Server.
+#     All text columns (Marathi included) are stored as NVARCHAR.
+#     Integer columns remain INT.
+#     Replaces the table if it already exists.
+#     Returns (engine, table_name) for further processing.
+#     """
+#     try:
+#         print(f"📂 Reading Excel file: {excel_path}")
+#         df = pd.read_excel(excel_path, dtype=str)
+
+#         if df.empty:
+#             print("⚠️ Excel file is empty, nothing to insert.")
+#             return None, None
+
+#         if exclude_cols:
+#             df = df.drop(columns=exclude_cols, errors="ignore")
+
+#         # Columns that must be integers
+#         int_cols = [
+#             "New_Voter_ID", "Voter_ID", "Section_No", "List_Number",
+#             "Page", "Card_Index", "Prabhag_No", "Ac_no", "Age_English"
+#         ]
+#         df = enforce_integer_columns(df, int_cols)
+
+#         # Ensure database exists
+#         ensure_database_exists(db_name)
+
+#         # Extract table name
+#         table_name = extract_table_name(excel_path)
+
+#         # Connect to database
+#         engine = get_engine(db_name)
+
+#         # Define SQLAlchemy dtype mapping
+#         sql_dtype = {}
+#         for col in df.columns:
+#             if col in int_cols:
+#                 sql_dtype[col] = types.INTEGER()
+#             else:
+#                 sql_dtype[col] = types.NVARCHAR(length=500)
+
+#         # Insert into SQL Server (replace table if exists)
+#         df.to_sql(
+#             table_name,
+#             engine,
+#             if_exists="replace",
+#             index=False,
+#             dtype=sql_dtype
+#         )
+
+#         print(f"✅ Inserted {len(df)} rows into table '{table_name}' in database '{db_name}'")
+#         return engine, table_name
+
+#     except Exception as e:
+#         print(f"❌ SQL insertion failed for {excel_path}: {e}")
+#         return None, None
+
+def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None, table_name=None):
     """
     Reads an Excel file and inserts it into SQL Server.
     All text columns (Marathi included) are stored as NVARCHAR.
     Integer columns remain INT.
     Replaces the table if it already exists.
     Returns (engine, table_name) for further processing.
+    
+    Parameters:
+    - excel_path: path to Excel file
+    - db_name: target database name
+    - exclude_cols: list of columns to drop before insert
+    - table_name: name of the SQL table to insert into (overrides default)
     """
     try:
         print(f"📂 Reading Excel file: {excel_path}")
@@ -1252,16 +1462,17 @@ def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
 
         # Columns that must be integers
         int_cols = [
-            "New_Voter_ID", "Voter_ID", "Section_No", "List_Number",
-            "Page", "Card_Index", "Prabhag_No", "Ac_no", "Age_English"
+            "New_Voter_ID", "Voter_ID", "Section_No", "List_No",
+            "Page", "Card_Index", "Prabhag_No", "Ac_no", "Age"
         ]
         df = enforce_integer_columns(df, int_cols)
 
         # Ensure database exists
         ensure_database_exists(db_name)
 
-        # Extract table name
-        table_name = extract_table_name(excel_path)
+        # Use provided table_name or extract from filename
+        if not table_name:
+            table_name = extract_table_name(excel_path)
 
         # Connect to database
         engine = get_engine(db_name)
@@ -1332,12 +1543,12 @@ def add_flags(engine, table_name):
         UPDATE {table_name}
         SET Flag = NULLIF(
             CONCAT_WS(',',
-                CASE WHEN Voter_Name IS NULL OR Voter_Name = '' THEN 'MISSING_VN' END,
-                CASE WHEN Relation_Name IS NULL OR Relation_Name = '' THEN 'MISSING_RN' END,
+                CASE WHEN FullnameMar IS NULL OR FullnameMar = '' THEN 'MISSING_VN' END,
+                CASE WHEN RLN_FM_NM_v1 IS NULL OR RLN_FM_NM_v1 = '' THEN 'MISSING_RN' END,
                 CASE WHEN EPIC_Number IS NULL OR EPIC_Number = '' THEN 'MISSING_EPIC' END,
-                CASE WHEN LEN(LTRIM(RTRIM(Voter_Name))) < 4 THEN 'VN_SHORT' END,
-                CASE WHEN LEN(LTRIM(RTRIM(Relation_Name))) < 4 THEN 'RN_SHORT' END,
-                CASE WHEN Voter_Last_Name <> Relation_Last_Name THEN 'VLN-RLN_MISMATCH' END
+                CASE WHEN LEN(LTRIM(RTRIM(FullnameMar))) < 4 THEN 'VN_SHORT' END,
+                CASE WHEN LEN(LTRIM(RTRIM(RLN_FM_NM_v1))) < 4 THEN 'RN_SHORT' END,
+                CASE WHEN SurnameM <> RLN_L_NM_V1 THEN 'VLN-RLN_MISMATCH' END
             ),
             ''
         );
@@ -1345,19 +1556,18 @@ def add_flags(engine, table_name):
 
         print(f"✅ Flags updated in table '{table_name}'")
 
-
-# --------------------------------------------
-# ============ Main Execution ================
 # --------------------------------------------
 if __name__ == "__main__":
     total_start_time = time.time()
     checkpoint = load_checkpoint()
     pdf_headers_dict = {}
+    all_voter_details = []
 
+    # Get all PDFs
     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
     print(f"📂 Found {len(pdf_files)} PDF files")
 
-    # Filter PDFs to process (skip already completed ones)
+    # Filter already processed PDFs
     pdf_files_to_process = []
     checkpoint_changed = False
     for pdf_file in pdf_files:
@@ -1372,19 +1582,18 @@ if __name__ == "__main__":
         else:
             pdf_files_to_process.append(pdf_file)
 
-    # Update checkpoint file
+    # Save checkpoint if changed
     if checkpoint_changed:
         if checkpoint:
             with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
                 json.dump(checkpoint, f, indent=2)
-        else:
-            if os.path.exists(CHECKPOINT_FILE):
-                os.remove(CHECKPOINT_FILE)
+        elif os.path.exists(CHECKPOINT_FILE):
+            os.remove(CHECKPOINT_FILE)
 
     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
 
     try:
-        for pdf_file in pdf_files_to_process:
+        for pdf_file in pdf_files_to_process:  # ✅ Only unprocessed PDFs
             start_time = time.time()
             pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
             print(f"\n📄 Processing: {pdf_name}")
@@ -1392,73 +1601,63 @@ if __name__ == "__main__":
             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
             pdf_voter_details = []
 
-            # ---------------- Extract PDF Header ----------------
-            pdf_header_info = {}
-            header_extracted = False
-            with fitz.open(pdf_file) as doc:
-                for page_number in range(1, 20):
-                    page = doc[page_number - 1]
-                    pix_low = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
-                    img_low = Image.frombytes("RGB", [pix_low.width, pix_low.height], pix_low.samples)
-
-                    if card_is_present(img_low):
-                        print(f"✅ Card found on page {page_number} of {pdf_name}. Extracting header...")
-                        pix_full = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
-                        img_full = Image.frombytes("RGB", [pix_full.width, pix_full.height], pix_full.samples)
-                        hdr = extract_header_info(img_full, top_margin=118.0, zoom_factor=zoom_factor)
-                        pdf_header_info = {
-                            "Municipal_Corporation": hdr.get("Municipal_Corporation", ""),
-                            "Prabhag_No": hdr.get("Prabhag_No", ""),
-                            "Prabhag_Name": hdr.get("Prabhag_Name", ""),
-                            "File_Name": os.path.basename(pdf_file)
-                        }
-                        header_extracted = True
-                        break
-
-            if not header_extracted:
-                print(f"⚠️ No cards found in {pdf_name}. Skipping header.")
-            else:
-                print(f"📑 Extracted PDF-level header for {pdf_name}: {pdf_header_info}")
-
-            pdf_headers_dict[pdf_name] = pdf_header_info
-
-            # ---------------- Process Pages ----------------
+           # ---------------- Process Pages with Per-Page Section Info ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1,13))  # all pages
+                pages_to_iterate = list(range(1, 14))  # all pages
 
-                # Resume from checkpoint
                 if pdf_name in checkpoint:
                     last_done = checkpoint[pdf_name]["last_page"]
                     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}")
                     old_emergency = checkpoint[pdf_name]["temp_excel"]
                     if os.path.exists(old_emergency):
                         df_existing = pd.read_excel(old_emergency, dtype=str)
+                        df_existing = df_existing.fillna('')
                         pdf_voter_details.extend(df_existing.to_dict("records"))
                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
 
                 for page_num in pages_to_iterate:
-                    page_voters = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
+                    page = doc[page_num - 1]
+                    pix = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+                    header_crop = img.crop((0, 0, img.width, int(118 * zoom_factor)))
+                    header_text = pytesseract.image_to_string(header_crop, config="--psm 6 -l mar").strip()
+                    section_no, section_name = extract_section_info(header_text)
+                    municipal = extract_municipal(header_text)
+                    prabhag_no, prabhag_name = extract_prabhag_info(header_text)    
+
+                    if not municipal or not section_no or not section_name:
+                        print(f"⚠️ Skipping page {page_num} — no header info found.")
+                        continue
+
+                    print(f"[Page {page_num}] Section No: {section_no}, Section Name: {section_name}")
+
+                    pdf_header_info = {
+                   "Section_No": section_no,
+                   "Section_Name": section_name,
+            "Municipal_Corporation": municipal,
+            "Prabhag_No": prabhag_no,
+            "Prabhag_Name": prabhag_name,
+                   "File_Name": os.path.basename(pdf_file),
+                   "Raw_Header_Text": header_text
+               }
+
+                    save_cards_dir = os.path.join("saved_cards", pdf_name)
+                    page_voters = process_page(
+    pdf_file,
+    page_num,
+    zoom_factor,
+    pdf_header_info=pdf_header_info,
+    save_cards_dir=save_cards_dir
+)
+
                     if page_voters:
                         pdf_voter_details.extend(page_voters)
                         save_checkpoint(pdf_name, page_num, temp_excel)
 
-                    # Emergency save + checkpoint
-                    # if pdf_voter_details:
-                    #     df_tmp = pd.DataFrame(pdf_voter_details)
-                    #     if column_order:
-                    #         ordered_cols = [col for col in column_order if col in df_tmp.columns]
-                    #         other_cols = [col for col in df_tmp.columns if col not in ordered_cols]
-                    #         df_tmp = df_tmp[ordered_cols + other_cols]
 
-                    #     for col in df_tmp.columns:
-                    #         df_tmp[col] = df_tmp[col].astype(str)
-
-                    #     df_tmp.to_excel(temp_excel, index=False, engine="openpyxl")
-                    #     save_checkpoint(pdf_name, page_num, temp_excel)
-                    #     print(f"💾 Emergency save at page {page_num}: {temp_excel}")
-
-            # ---------------- Final Save + SQL Insert ----------------
+            # ---------------- Save Excel + Insert to SQL ----------------
             if pdf_voter_details:
                 df_pdf = pd.DataFrame(pdf_voter_details)
                 if column_order:
@@ -1473,73 +1672,43 @@ if __name__ == "__main__":
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
-            # if pdf_voter_details:
-            #     # Ensure consistent keys for all rows
-            #     normalized_records = []
-            #     for rec in pdf_voter_details:
-            #         norm = {col: str(rec.get(col, "")) for col in column_order}
-            #         normalized_records.append(norm)
-
-            #     df_pdf = pd.DataFrame(normalized_records)
-
-            #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-            #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
-            #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
-
+                # SQL Insertion
                 try:
                     engine, table_name = insert_excel_to_sql(
                         output_pdf_excel,
                         exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
                     )
-    
                     if engine is not None and table_name is not None:
-                        print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
-
-                        # ---------------- Add Flags ----------------
+                        print(f"📥 Inserted into SQL Server table: {table_name}")
                         try:
-                            add_flags(engine, table_name)  # Use dynamic table name
-                            print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
+                            add_flags(engine, table_name)
+                            print(f"✅ Flags updated in table: {table_name}")
                         except Exception as flag_e:
-                            print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
-
+                            print(f"❌ Flag update failed: {flag_e}")
                 except Exception as e:
                     print(f"❌ SQL insertion failed: {e}")
 
-                # Insert into SQL: DB = Municipality, Table = Ward
-                # try:
-                #     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-                #     print("📥 Data successfully inserted into SQL Server!")
-                #     # ---------------- Add Flags ----------------
-                #     try:
-                #         from sqlalchemy import create_engine
-                #         engine = create_engine(connection_string, fast_executemany=True)  # Make sure your connection string is correct
-                #         add_flags(engine, "Ward")  # Replace "Ward" with your table name
-                #         print("✅ Flags added/updated successfully in SQL table!")
-                #     except Exception as flag_e:
-                #         print(f"❌ Failed to add/update flags: {flag_e}")
-                # except Exception as e:
-                #     print(f"❌ SQL insertion failed: {e}")
+                # Cleanup checkpoint and emergency file
+                temp_file = checkpoint.get(pdf_name, {}).get("temp_excel")
+                if temp_file and os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    print(f"🗑️ Deleted emergency file: {temp_file}")
 
-                # Cleanup checkpoint + emergency
-                checkpoint = load_checkpoint()
+                # Remove this PDF from checkpoint
                 if pdf_name in checkpoint:
-                    temp_file = checkpoint[pdf_name].get("temp_excel")
-                    if temp_file and os.path.exists(temp_file):
-                        os.remove(temp_file)
-                        print(f"🗑️ Deleted emergency file for completed PDF: {temp_file}")
                     del checkpoint[pdf_name]
 
-                    if checkpoint:
-                        with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-                            json.dump(checkpoint, f, indent=2)
-                        print(f"✅ Updated checkpoint after finishing {pdf_name}")
-                    else:
-                        if os.path.exists(CHECKPOINT_FILE):
-                            os.remove(CHECKPOINT_FILE)
-                        print(f"🗑️ Deleted checkpoint file as all PDFs are processed")
+                # Save or delete checkpoint file
+                if checkpoint:
+                    with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                        json.dump(checkpoint, f, indent=2)
+                else:
+                    if os.path.exists(CHECKPOINT_FILE):
+                        os.remove(CHECKPOINT_FILE)
+                    print(f"🗑️ Deleted checkpoint file (all done)")
 
             else:
-                print(f"⚠️ No data extracted from {pdf_name}. Skipping file save.")
+                print(f"⚠️ No data extracted from {pdf_name}.")
 
             # Timing
             elapsed_time = time.time() - start_time
@@ -1548,9 +1717,9 @@ if __name__ == "__main__":
             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
 
     except KeyboardInterrupt:
-        print("\n⚠️ Process interrupted by user! Saving emergency progress...")
+        print("\n⚠️ Interrupted by user. Saving emergency progress...")
         save_progress(pdf_voter_details, column_order, temp_excel)
-        print("💾 Emergency file saved. You can resume later using checkpoint.")
+        print("💾 Emergency file saved.")
 
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
