@@ -43,9 +43,9 @@ engine = create_engine(connection_string, fast_executemany=True)
 # os.makedirs(card_image_folder, exist_ok=True)
 
 
-pdf_folder = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Input_Pdf"
-temp_excel = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Output_Sample\output_temp1.xlsx"
-output_excel = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Output_Sample\process_test1.xlsx"
+pdf_folder = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Mar_Coorperation_OCR\Input_Pdf"
+temp_excel = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Mar_Coorperation_OCR\Output_Sample\output_temp1.xlsx"
+output_excel = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Mar_Coorperation_OCR\Output_Sample\process_test1.xlsx"
 card_image_folder = r"Extracted_Card_Img"
 os.makedirs(card_image_folder, exist_ok=True)
 
@@ -432,12 +432,6 @@ def extract_index_number(paddle_text):
                 print(f"[INDEX_NUM] Extracted (plain): {index_number} from {line}")
                 
                 return index_number        
-
-        # # Accept only if it looks like a valid index number (digits with optional / separators)
-        # if re.match(r"^\d+(?:/\d+)*$", normalized):
-        #     index_number = normalized
-        #     debug_log(f"[INDEX_NUM] Extracted: {index_number} from line: {line}")
-        #     break
         
     return index_number
 
@@ -533,24 +527,6 @@ def classify_gender(raw_text: str) -> str:
 
 def marathi_to_english_gender(normalized_gender: str) -> str:
     return {"पुरुष": "Male", "स्त्री": "Female", "इतर": "Other"}.get(normalized_gender, "")
-
-
-# ---------------------------------------------------------------------
-# =========== Parse Voter Card Info from Tesseract OCR Text ============
-# ---------------------------------------------------------------------
-# def parse_voter_card(marathi_text, cleaned_text):
-#     age_marathi, age_english = extract_age(cleaned_text)
-#     raw_gender, normalized_gender = extract_gender(cleaned_text)
-#     gender_english = marathi_to_english_gender(normalized_gender)
-
-#     return {
-#         "Age_Marathi": age_marathi,
-#         "Age_English": age_english,
-#         "Gender_Marathi": normalized_gender,  # normalized Marathi root word
-#         "Gender_English": gender_english,     # English category
-#     }
-
-
 
 # ---------------------------------------------------------------------------
 # =========== Extract and Correct EPIC Number from PaddleOCR Text ============
@@ -719,7 +695,7 @@ def finalize_output(temp_excel, output_excel):
 
 
 column_order = [
-    "File_Name","Municipal_Corporation", "Prabhag_No", "Prabhag_Name","Section_No", "Section_Name","New_Voter_ID","EPIC_Number","Ac_no","List_Number",
+    "File_Name","Municipal_Corporation", "Prabhag_No", "Prabhag_Name","Section_No", "Section_Name","New_Voter_ID","EPIC_Number","Ac_no","List_No",
     "Voter_ID", "Page",
     "Card_Index"
 
@@ -736,10 +712,6 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counte
       - voter_details (list of dicts)
       - updated serial_counter
     """
-    import fitz  # PyMuPDF
-    from PIL import Image
-    import numpy as np
-    import os
 
     voter_details = []
 
@@ -787,7 +759,7 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counte
         # === Save Parsed Info ===
         voter_details.append({
             "EPIC_Number": correct_epic_number(epic_number) if epic_number else "",
-            "List_Number": list_number,
+            "List_No": list_number,
             "Ac_no": ac_no,
             "New_Voter_ID": index_number,
             "Voter_ID": serial_number,
@@ -803,84 +775,6 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counte
 
     doc.close()
     return voter_details, serial_counter   # ✅ always two values
-
-
-# def process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter):
-#     """
-#     Process a single page and return voter-level details:
-#     - EPIC, List No, AC No, Index No, Serial No
-#     - Plus header info: Section_No, Section_Name, and file metadata
-#     """
-#     import fitz  # PyMuPDF
-#     from PIL import Image
-#     import numpy as np
-#     import os
-
-#     voter_details = []
-#     serial_counter = 1
-
-#     # === Load PDF & Page ===
-#     doc = fitz.open(pdf_file)
-#     page = doc[page_num - 1]
-#     pix = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
-#     full_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-#     # === Extract Page Header Info ===
-#     header_info = extract_header_info(full_img, top_margin=118.0, zoom_factor=zoom_factor)
-#     section_no = header_info.get("Section_No", "")
-#     section_name = header_info.get("Section_Name", "")
-
-#     print(f"📌 Page {page_num} Header → Section_No: {section_no} | Section_Name: {section_name}")
-
-#     # === Convert to NumPy Array ===
-#     pix_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-#     if pix_np.shape[2] == 4:
-#         pix_np = pix_np[:, :, :3]
-
-#     # === Detect Voter Card Boxes ===
-#     card_coords_points = find_card_boxes(pix_np)
-#     if not card_coords_points:
-#         print(f"⚠️ No card boxes detected on page {page_num}")
-#         doc.close()
-#         return []
-
-#     # === OCR Each Voter Card Box ===
-#     for card_index, (x1, y1, x2, y2) in enumerate(card_coords_points, start=1):
-#         card_img = full_img.crop((x1, y1, x2, y2))
-#         preprocessed_img = preprocess_image(card_img)
-
-#         result_paddle = ocr_paddle.ocr(np.array(preprocessed_img))
-#         paddle_text = "\n".join([line[1][0] for line in result_paddle[0]]) if result_paddle and result_paddle[0] else ""
-
-#         epic_number = extract_epic_number(paddle_text)
-#         list_number = extract_list_number(paddle_text)
-#         ac_no = extract_assembly_consitution_no(paddle_text)
-#         index_number = extract_index_number(paddle_text)
-#         serial_number, _, serial_counter = extract_serial_number(
-#             paddle_text, paddle_text, serial_counter, False
-#         )
-
-#         # === Save Minimal Parsed Info ===
-#         voter_details.append({
-#             "EPIC_Number": correct_epic_number(epic_number) if epic_number else None,
-#             "List_Number": list_number,
-#             "AC_No": ac_no,
-#             "Index_Number": index_number,
-#             "Serial_Number": serial_number,
-#             "Section_No": section_no,
-#             "Section_Name": section_name,
-#             "Page": page_num,
-#             "Card_Index": card_index,
-#             "Municipal_Corporation": pdf_header_info.get("Municipal_Corporation", ""),
-#             "Prabhag_No": pdf_header_info.get("Prabhag_No", ""),
-#             "Prabhag_Name": pdf_header_info.get("Prabhag_Name", ""),
-#             "File_Name": pdf_header_info.get("File_Name", os.path.basename(pdf_file)),
-#         })
-
-#     doc.close()
-#     return voter_details, serial_counter
-
-
 
 # ---------------------------------------------------------------
 # ================ Checkpointing Helpers ===============    
@@ -977,7 +871,7 @@ def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
 
         # Columns that must be integers
         int_cols = [
-            "New_Voter_ID", "Voter_ID", "Section_No", "List_Number",
+            "New_Voter_ID", "Voter_ID", "Section_No", "List_No",
             "Page", "Card_Index", "Prabhag_No", "Ac_no"
         ]
         df = enforce_integer_columns(df, int_cols)
@@ -1020,26 +914,201 @@ def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
 # --------------------------------------------
 # ============ Main Execution ================
 # --------------------------------------------
+# if __name__ == "__main__":
+#     total_start_time = time.time()
+#     checkpoint = load_checkpoint()
+#     pdf_headers_dict = {}
+#     import paddle
+    
+#     if paddle.is_compiled_with_cuda():
+#         print(f"✅ GPU available. Current device: {paddle.get_device()}")
+#         print(f"Number of GPUs detected: {paddle.device.cuda.device_count()}")
+#     else:
+#         print("⚠️ No GPU detected, using CPU")
+#     if paddle.is_compiled_with_cuda():
+#         print("🚀 PaddlePaddle is using GPU!")
+#     else:
+#         print("⚠️ PaddlePaddle is running on CPU")
+        
+#     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
+#     print(f"📂 Found {len(pdf_files)} PDF files")
+
+#     # Filter PDFs to process (skip already completed ones)
+#     pdf_files_to_process = []
+#     checkpoint_changed = False
+#     for pdf_file in pdf_files:
+#         pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
+#         output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+
+#         if os.path.exists(output_pdf_excel):
+#             print(f"✔️ Skipping already processed PDF: {pdf_name}")
+#             if pdf_name in checkpoint:
+#                 del checkpoint[pdf_name]
+#                 checkpoint_changed = True
+#         else:
+#             pdf_files_to_process.append(pdf_file)
+
+#     # Update checkpoint file
+#     if checkpoint_changed:
+#         if checkpoint:
+#             with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+#                 json.dump(checkpoint, f, indent=2)
+#         else:
+#             if os.path.exists(CHECKPOINT_FILE):
+#                 os.remove(CHECKPOINT_FILE)
+
+#     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
+
+#     try:
+#         for pdf_file in pdf_files_to_process:
+#             start_time = time.time()
+#             pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
+#             print(f"\n📄 Processing: {pdf_name}")
+
+#             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
+#             pdf_voter_details = []
+
+#             # ---------------- Extract PDF Header ----------------
+#             pdf_header_info = {}
+#             header_extracted = False
+#             with fitz.open(pdf_file) as doc:
+#                 for page_number in range(1, 20):
+#                     page = doc[page_number - 1]
+#                     pix_low = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
+#                     img_low = Image.frombytes("RGB", [pix_low.width, pix_low.height], pix_low.samples)
+
+#                     if card_is_present(img_low):
+#                         print(f"✅ Card found on page {page_number} of {pdf_name}. Extracting header...")
+#                         pix_full = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
+#                         img_full = Image.frombytes("RGB", [pix_full.width, pix_full.height], pix_full.samples)
+#                         hdr = extract_header_info(img_full, top_margin=118.0, zoom_factor=zoom_factor)
+#                         pdf_header_info = {
+#                             "Municipal_Corporation": hdr.get("Municipal_Corporation", ""),
+#                             "Prabhag_No": hdr.get("Prabhag_No", ""),
+#                             "Prabhag_Name": hdr.get("Prabhag_Name", ""),
+#                             "File_Name": os.path.basename(pdf_file)
+#                         }
+#                         header_extracted = True
+#                         break
+
+#             if not header_extracted:
+#                 print(f"⚠️ No cards found in {pdf_name}. Skipping header.")
+#             else:
+#                 print(f"📑 Extracted PDF-level header for {pdf_name}: {pdf_header_info}")
+
+#             pdf_headers_dict[pdf_name] = pdf_header_info
+
+#             # ---------------- Process Pages ----------------
+#             with fitz.open(pdf_file) as doc:
+#                 total_pages = len(doc)
+#                 pages_to_iterate = list(range(1, 14) ) # all pages
+
+#                 if pdf_name in checkpoint:
+#                     last_done = checkpoint[pdf_name]["last_page"]
+#                     serial_counter = checkpoint[pdf_name].get("serial_counter", 1)  # restore serial
+#                     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}, serial {serial_counter}")
+#                     old_emergency = checkpoint[pdf_name]["temp_excel"]
+#                     if os.path.exists(old_emergency):
+#                         df_existing = pd.read_excel(old_emergency, dtype=str)
+#                         # normalize to fixed columns
+#                         df_existing = df_existing.reindex(columns=column_order, fill_value="")
+#                         pdf_voter_details.extend(df_existing.to_dict("records"))
+#                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
+#                 else:
+#                     serial_counter = 1
+
+#                 for page_num in pages_to_iterate:
+#                     page_voters, serial_counter = process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter)
+#                     if page_voters:
+#                         pdf_voter_details.extend(page_voters)
+#                         save_checkpoint(pdf_name, page_num, temp_excel, serial_counter)
+
+
+#             if pdf_voter_details:
+#                 df_pdf = pd.DataFrame(pdf_voter_details)
+#                 df_pdf = df_pdf.reindex(columns=column_order, fill_value="")  # ensure fixed set
+#                 for col in df_pdf.columns:
+#                     df_pdf[col] = df_pdf[col].astype(str)
+
+#                 output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+#                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
+#                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
+
+#                 # Insert into SQL: DB = Municipality, Table = Ward
+#                 try:
+#                     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
+#                     print("📥 Data successfully inserted into SQL Server!")
+#                 except Exception as e:
+#                     print(f"❌ SQL insertion failed: {e}")
+
+#                 # Cleanup checkpoint + emergency
+#                 checkpoint = load_checkpoint()
+#                 if pdf_name in checkpoint:
+#                     temp_file = checkpoint[pdf_name].get("temp_excel")
+#                     if temp_file and os.path.exists(temp_file):
+#                         os.remove(temp_file)
+#                         print(f"🗑️ Deleted emergency file for completed PDF: {temp_file}")
+#                     del checkpoint[pdf_name]
+
+#                     if checkpoint:
+#                         with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+#                             json.dump(checkpoint, f, indent=2)
+#                         print(f"✅ Updated checkpoint after finishing {pdf_name}")
+#                     else:
+#                         if os.path.exists(CHECKPOINT_FILE):
+#                             os.remove(CHECKPOINT_FILE)
+#                         print(f"🗑️ Deleted checkpoint file as all PDFs are processed")
+
+#             else:
+#                 print(f"⚠️ No data extracted from {pdf_name}. Skipping file save.")
+
+#             # Timing
+#             elapsed_time = time.time() - start_time
+#             h, rem = divmod(elapsed_time, 3600)
+#             m, s = divmod(rem, 60)
+#             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
+
+#     except KeyboardInterrupt:
+#         print("\n⚠️ Process interrupted by user! Saving emergency progress...")
+#         save_progress(pdf_voter_details, column_order, temp_excel)
+#         print("💾 Emergency file saved. You can resume later using checkpoint.")
+
+#     except Exception as e:
+#         print(f"\n❌ Unexpected error: {e}")
+#         save_progress(pdf_voter_details, column_order, temp_excel)
+#         print("💾 Emergency file saved due to error.")
+
+#     # Total timing
+#     total_elapsed = time.time() - total_start_time
+#     th, rem = divmod(total_elapsed, 3600)
+#     tm, ts = divmod(rem, 60)
+#     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
+    
+
+
+# ---------------------------------------------------------------
+# ============ Main Execution with Merge excel ============
+# ---------------------------------------------------------------
 if __name__ == "__main__":
     total_start_time = time.time()
     checkpoint = load_checkpoint()
     pdf_headers_dict = {}
     import paddle
-    
+
+    # ---------------- GPU / CPU Status ----------------
     if paddle.is_compiled_with_cuda():
         print(f"✅ GPU available. Current device: {paddle.get_device()}")
         print(f"Number of GPUs detected: {paddle.device.cuda.device_count()}")
-    else:
-        print("⚠️ No GPU detected, using CPU")
-    if paddle.is_compiled_with_cuda():
         print("🚀 PaddlePaddle is using GPU!")
     else:
+        print("⚠️ No GPU detected, using CPU")
         print("⚠️ PaddlePaddle is running on CPU")
-        
+
+    # ---------------- Load PDFs ----------------
     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
     print(f"📂 Found {len(pdf_files)} PDF files")
 
-    # Filter PDFs to process (skip already completed ones)
+    # ---------------- Filter Already Processed ----------------
     pdf_files_to_process = []
     checkpoint_changed = False
     for pdf_file in pdf_files:
@@ -1054,17 +1123,16 @@ if __name__ == "__main__":
         else:
             pdf_files_to_process.append(pdf_file)
 
-    # Update checkpoint file
     if checkpoint_changed:
         if checkpoint:
             with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
                 json.dump(checkpoint, f, indent=2)
-        else:
-            if os.path.exists(CHECKPOINT_FILE):
-                os.remove(CHECKPOINT_FILE)
+        elif os.path.exists(CHECKPOINT_FILE):
+            os.remove(CHECKPOINT_FILE)
 
     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
 
+    # ---------------- Process Each PDF ----------------
     try:
         for pdf_file in pdf_files_to_process:
             start_time = time.time()
@@ -1074,7 +1142,7 @@ if __name__ == "__main__":
             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
             pdf_voter_details = []
 
-            # ---------------- Extract PDF Header ----------------
+            # ===== Header Extraction =====
             pdf_header_info = {}
             header_extracted = False
             with fitz.open(pdf_file) as doc:
@@ -1104,34 +1172,22 @@ if __name__ == "__main__":
 
             pdf_headers_dict[pdf_name] = pdf_header_info
 
-            # ---------------- Process Pages ----------------
+            # ===== Process Pages =====
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1, 14) ) # all pages
-
-                # Resume from checkpoint
-                # if pdf_name in checkpoint:
-                #     last_done = checkpoint[pdf_name]["last_page"]
-                #     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}")
-                #     old_emergency = checkpoint[pdf_name]["temp_excel"]
-                #     if os.path.exists(old_emergency):
-                #         df_existing = pd.read_excel(old_emergency, dtype=str)
-                #         pdf_voter_details.extend(df_existing.to_dict("records"))
-                #     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
+                pages_to_iterate = list(range(1, 14))
+                serial_counter = 1
 
                 if pdf_name in checkpoint:
                     last_done = checkpoint[pdf_name]["last_page"]
-                    serial_counter = checkpoint[pdf_name].get("serial_counter", 1)  # restore serial
+                    serial_counter = checkpoint[pdf_name].get("serial_counter", 1)
                     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}, serial {serial_counter}")
                     old_emergency = checkpoint[pdf_name]["temp_excel"]
                     if os.path.exists(old_emergency):
                         df_existing = pd.read_excel(old_emergency, dtype=str)
-                        # normalize to fixed columns
                         df_existing = df_existing.reindex(columns=column_order, fill_value="")
                         pdf_voter_details.extend(df_existing.to_dict("records"))
                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
-                else:
-                    serial_counter = 1
 
                 for page_num in pages_to_iterate:
                     page_voters, serial_counter = process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter)
@@ -1139,61 +1195,16 @@ if __name__ == "__main__":
                         pdf_voter_details.extend(page_voters)
                         save_checkpoint(pdf_name, page_num, temp_excel, serial_counter)
 
-                # for page_num in pages_to_iterate:
-                #     page_voters = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
-                #     if page_voters:
-                #         pdf_voter_details.extend(page_voters)
-                #         save_checkpoint(pdf_name, page_num, temp_excel)
-
-                    # Emergency save + checkpoint
-                    # if pdf_voter_details:
-                    #     df_tmp = pd.DataFrame(pdf_voter_details)
-                    #     if column_order:
-                    #         ordered_cols = [col for col in column_order if col in df_tmp.columns]
-                    #         other_cols = [col for col in df_tmp.columns if col not in ordered_cols]
-                    #         df_tmp = df_tmp[ordered_cols + other_cols]
-
-                    #     for col in df_tmp.columns:
-                    #         df_tmp[col] = df_tmp[col].astype(str)
-
-                    #     df_tmp.to_excel(temp_excel, index=False, engine="openpyxl")
-                    #     save_checkpoint(pdf_name, page_num, temp_excel)
-                    #     print(f"💾 Emergency save at page {page_num}: {temp_excel}")
-
-            # ---------------- Final Save + SQL Insert ----------------
-            # if pdf_voter_details:
-            #     df_pdf = pd.DataFrame(pdf_voter_details)
-            #     if column_order:
-            #         ordered_cols = [col for col in column_order if col in df_pdf.columns]
-            #         other_cols = [col for col in df_pdf.columns if col not in ordered_cols]
-            #         df_pdf = df_pdf[ordered_cols + other_cols]
-
-            #     for col in df_pdf.columns:
-            #         df_pdf[col] = df_pdf[col].astype(str)
-
-            #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-            #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
-            #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
-
-
+            # ===== Save Individual Excel =====
             if pdf_voter_details:
                 df_pdf = pd.DataFrame(pdf_voter_details)
-                df_pdf = df_pdf.reindex(columns=column_order, fill_value="")  # ensure fixed set
-                for col in df_pdf.columns:
-                    df_pdf[col] = df_pdf[col].astype(str)
-
+                df_pdf = df_pdf.reindex(columns=column_order, fill_value="")
+                df_pdf = df_pdf.astype(str)
                 output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
-                # Insert into SQL: DB = Municipality, Table = Ward
-                try:
-                    insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-                    print("📥 Data successfully inserted into SQL Server!")
-                except Exception as e:
-                    print(f"❌ SQL insertion failed: {e}")
-
-                # Cleanup checkpoint + emergency
+                # Cleanup checkpoint & temp
                 checkpoint = load_checkpoint()
                 if pdf_name in checkpoint:
                     temp_file = checkpoint[pdf_name].get("temp_excel")
@@ -1206,33 +1217,79 @@ if __name__ == "__main__":
                         with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
                             json.dump(checkpoint, f, indent=2)
                         print(f"✅ Updated checkpoint after finishing {pdf_name}")
-                    else:
-                        if os.path.exists(CHECKPOINT_FILE):
-                            os.remove(CHECKPOINT_FILE)
+                    elif os.path.exists(CHECKPOINT_FILE):
+                        os.remove(CHECKPOINT_FILE)
                         print(f"🗑️ Deleted checkpoint file as all PDFs are processed")
 
-            else:
-                print(f"⚠️ No data extracted from {pdf_name}. Skipping file save.")
+                # ✅ Delete processed PDF file after success
+                if os.path.exists(pdf_file):
+                    os.remove(pdf_file)
+                    print(f"🗑️ Deleted processed PDF: {pdf_file}")
 
-            # Timing
+            else:
+                print(f"⚠️ No data extracted from {pdf_name}.")
+
             elapsed_time = time.time() - start_time
             h, rem = divmod(elapsed_time, 3600)
             m, s = divmod(rem, 60)
             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
 
     except KeyboardInterrupt:
-        print("\n⚠️ Process interrupted by user! Saving emergency progress...")
+        print("\n⚠️ Interrupted by user. Saving emergency progress...")
         save_progress(pdf_voter_details, column_order, temp_excel)
-        print("💾 Emergency file saved. You can resume later using checkpoint.")
-
+        print("💾 Emergency file saved.")
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
         save_progress(pdf_voter_details, column_order, temp_excel)
         print("💾 Emergency file saved due to error.")
 
-    # Total timing
+    # ---------------- Merge All Excel Files ----------------
+    try:
+        print("\n📦 Merging all generated Excel files...")
+        output_folder = os.path.dirname(output_excel)
+        merged_df = pd.DataFrame()
+
+        for file in os.listdir(output_folder):
+            if file.endswith(".xlsx") and not file.endswith("_emergency.xlsx") and "All_Merged_Output" not in file:
+                file_path = os.path.join(output_folder, file)
+                df = pd.read_excel(file_path, dtype=str)
+                merged_df = pd.concat([merged_df, df], ignore_index=True)
+
+        if not merged_df.empty:
+            merged_excel_path = os.path.join(output_folder, "All_Merged_Output.xlsx")
+            merged_df.to_excel(merged_excel_path, index=False, engine="openpyxl")
+            print(f"✅ Merged Excel saved at: {merged_excel_path}")
+
+            # 🧹 Delete all individual Excel files
+            for file in os.listdir(output_folder):
+                if file.endswith(".xlsx") and file != "All_Merged_Output.xlsx":
+                    try:
+                        os.remove(os.path.join(output_folder, file))
+                    except Exception as del_err:
+                        print(f"⚠️ Could not delete {file}: {del_err}")
+
+            print("🧹 Cleaned up individual Excel files. Only merged file kept.")
+
+            # ---------------- Insert Merged File into SQL ----------------
+            try:
+                engine, table_name = insert_excel_to_sql(
+                    merged_excel_path,
+                    exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                )
+                if engine is not None and table_name is not None:
+                    print(f"📥 Inserted merged data into SQL table: {table_name}")
+                    
+            except Exception as sql_e:
+                print(f"❌ SQL insertion for merged file failed: {sql_e}")
+
+        else:
+            print("⚠️ No Excel files found to merge.")
+    except Exception as e:
+        print(f"❌ Merging step failed: {e}")
+
+    # ---------------- Total Time ----------------
     total_elapsed = time.time() - total_start_time
     th, rem = divmod(total_elapsed, 3600)
     tm, ts = divmod(rem, 60)
     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
-    
+
