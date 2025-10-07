@@ -82,8 +82,8 @@ ocr_paddle = PaddleOCR(use_angle_cls=True, lang='en', rec=True, gpu=True, precis
 # ----------------------------------------
 # ========= Prefix Mapping File =========
 # ----------------------------------------
-prefix_mapping_file = r"D:\Sahil_Tejam\ALL_OCR\HINDI_OCR\Prefix.xlsx"
-sheet_name = "Dombivali-143"
+prefix_mapping_file = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Corporation_wise_prefix.xlsx"
+sheet_name = "KBMC"
 valid_prefixes = set()
 
 try:
@@ -683,7 +683,7 @@ def extract_index_number(paddle_text):
 # -----------------------------------------------------
 # =========== Correct Name using Dictionary ============
 # -----------------------------------------------------
-with open("D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Marathi_Vidhansabha_OCR\corrections.json", "r", encoding="utf-8") as f:
+with open("D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Mar_Coorperation_OCR\corrections.json", "r", encoding="utf-8") as f:
     correction_dict = json.load(f)
 
 def correct_name_with_dict(name: str) -> str:
@@ -1222,10 +1222,10 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info=None, save_car
 
 
     # # (Optional) Save debug header image
-    debug_filename = f"debug_header_page{page_num}.png"
-    header_crop.save(debug_filename)
-    print(f"🖼️ Saved debug header crop: {debug_filename}")
-    print(f"[Header Page {page_num}] Section_No: {section_no}, Section_Name: {section_name}")
+    # debug_filename = f"debug_header_page{page_num}.png"
+    # header_crop.save(debug_filename)
+    # print(f"🖼️ Saved debug header crop: {debug_filename}")
+    # print(f"[Header Page {page_num}] Section_No: {section_no}, Section_Name: {section_name}")
 
     try:
         card_coords_points = find_card_boxes(pix_np)
@@ -1245,13 +1245,13 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info=None, save_car
     for card_index, (x1, y1, x2, y2) in enumerate(card_coords_points, start=1):
         card_img = full_img.crop((x1, y1, x2, y2))
 
-        if save_cards_dir:
-            card_filename = os.path.join(
-                save_cards_dir,
-                f"{os.path.splitext(os.path.basename(pdf_file))[0]}_page{page_num}_card{card_index}.png"
-            )
-            card_img.save(card_filename)
-            print(f"🖼️ Saved card image: {card_filename}")
+        # if save_cards_dir:
+        #     card_filename = os.path.join(
+        #         save_cards_dir,
+        #         f"{os.path.splitext(os.path.basename(pdf_file))[0]}_page{page_num}_card{card_index}.png"
+        #     )
+        #     card_img.save(card_filename)
+        #     print(f"🖼️ Saved card image: {card_filename}")
 
         # Preprocess + OCR
         preprocessed_img = preprocess_image(card_img)
@@ -1557,11 +1557,17 @@ def add_flags(engine, table_name):
         print(f"✅ Flags updated in table '{table_name}'")
 
 # --------------------------------------------
+# --------------Main Loop (Merge)----------------
+# --------------------------------------------
 if __name__ == "__main__":
     total_start_time = time.time()
     checkpoint = load_checkpoint()
     pdf_headers_dict = {}
     all_voter_details = []
+
+    # # Input/output folders
+    # pdf_folder = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Input_Pdf"
+    # output_excel = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Output_Sample\combined_output.xlsx"
 
     # Get all PDFs
     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
@@ -1593,7 +1599,7 @@ if __name__ == "__main__":
     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
 
     try:
-        for pdf_file in pdf_files_to_process:  # ✅ Only unprocessed PDFs
+        for pdf_file in pdf_files_to_process:  # ✅ Process one PDF at a time
             start_time = time.time()
             pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
             print(f"\n📄 Processing: {pdf_name}")
@@ -1601,10 +1607,10 @@ if __name__ == "__main__":
             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
             pdf_voter_details = []
 
-           # ---------------- Process Pages with Per-Page Section Info ----------------
+            # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1, 14))  # all pages
+                pages_to_iterate = list(range(1, 15))
 
                 if pdf_name in checkpoint:
                     last_done = checkpoint[pdf_name]["last_page"]
@@ -1623,9 +1629,10 @@ if __name__ == "__main__":
 
                     header_crop = img.crop((0, 0, img.width, int(118 * zoom_factor)))
                     header_text = pytesseract.image_to_string(header_crop, config="--psm 6 -l mar").strip()
+
                     section_no, section_name = extract_section_info(header_text)
                     municipal = extract_municipal(header_text)
-                    prabhag_no, prabhag_name = extract_prabhag_info(header_text)    
+                    prabhag_no, prabhag_name = extract_prabhag_info(header_text)
 
                     if not municipal or not section_no or not section_name:
                         print(f"⚠️ Skipping page {page_num} — no header info found.")
@@ -1634,28 +1641,27 @@ if __name__ == "__main__":
                     print(f"[Page {page_num}] Section No: {section_no}, Section Name: {section_name}")
 
                     pdf_header_info = {
-                   "Section_No": section_no,
-                   "Section_Name": section_name,
-            "Municipal_Corporation": municipal,
-            "Prabhag_No": prabhag_no,
-            "Prabhag_Name": prabhag_name,
-                   "File_Name": os.path.basename(pdf_file),
-                   "Raw_Header_Text": header_text
-               }
+                        "Section_No": section_no,
+                        "Section_Name": section_name,
+                        "Municipal_Corporation": municipal,
+                        "Prabhag_No": prabhag_no,
+                        "Prabhag_Name": prabhag_name,
+                        "File_Name": os.path.basename(pdf_file),
+                        "Raw_Header_Text": header_text
+                    }
 
                     save_cards_dir = os.path.join("saved_cards", pdf_name)
                     page_voters = process_page(
-    pdf_file,
-    page_num,
-    zoom_factor,
-    pdf_header_info=pdf_header_info,
-    save_cards_dir=save_cards_dir
-)
+                        pdf_file,
+                        page_num,
+                        zoom_factor,
+                        pdf_header_info=pdf_header_info,
+                        save_cards_dir=save_cards_dir
+                    )
 
                     if page_voters:
                         pdf_voter_details.extend(page_voters)
                         save_checkpoint(pdf_name, page_num, temp_excel)
-
 
             # ---------------- Save Excel + Insert to SQL ----------------
             if pdf_voter_details:
@@ -1672,40 +1678,20 @@ if __name__ == "__main__":
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
-                # SQL Insertion
-                try:
-                    engine, table_name = insert_excel_to_sql(
-                        output_pdf_excel,
-                        exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
-                    )
-                    if engine is not None and table_name is not None:
-                        print(f"📥 Inserted into SQL Server table: {table_name}")
-                        try:
-                            add_flags(engine, table_name)
-                            print(f"✅ Flags updated in table: {table_name}")
-                        except Exception as flag_e:
-                            print(f"❌ Flag update failed: {flag_e}")
-                except Exception as e:
-                    print(f"❌ SQL insertion failed: {e}")
-
-                # Cleanup checkpoint and emergency file
+                # Cleanup temporary checkpoint file
                 temp_file = checkpoint.get(pdf_name, {}).get("temp_excel")
                 if temp_file and os.path.exists(temp_file):
                     os.remove(temp_file)
-                    print(f"🗑️ Deleted emergency file: {temp_file}")
 
                 # Remove this PDF from checkpoint
                 if pdf_name in checkpoint:
                     del checkpoint[pdf_name]
 
-                # Save or delete checkpoint file
                 if checkpoint:
                     with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
                         json.dump(checkpoint, f, indent=2)
-                else:
-                    if os.path.exists(CHECKPOINT_FILE):
-                        os.remove(CHECKPOINT_FILE)
-                    print(f"🗑️ Deleted checkpoint file (all done)")
+                elif os.path.exists(CHECKPOINT_FILE):
+                    os.remove(CHECKPOINT_FILE)
 
             else:
                 print(f"⚠️ No data extracted from {pdf_name}.")
@@ -1726,8 +1712,243 @@ if __name__ == "__main__":
         save_progress(pdf_voter_details, column_order, temp_excel)
         print("💾 Emergency file saved due to error.")
 
+    # ---------------- Merge All Excel Files ----------------
+    try:
+        print("\n📦 Merging all generated Excel files...")
+
+        output_folder = os.path.dirname(output_excel)
+        merged_df = pd.DataFrame()
+
+        for file in os.listdir(output_folder):
+            if file.endswith(".xlsx") and not file.endswith("_emergency.xlsx") and "Merged_Output" not in file:
+                file_path = os.path.join(output_folder, file)
+                df = pd.read_excel(file_path, dtype=str)
+                merged_df = pd.concat([merged_df, df], ignore_index=True)
+
+                if not merged_df.empty:
+                    merged_excel_path = os.path.join(output_folder, "All_Merged_Output.xlsx")
+                    merged_df.to_excel(merged_excel_path, index=False, engine="openpyxl")
+                    print(f"✅ Merged Excel saved at: {merged_excel_path}")
+
+                    # 🧹 Delete all individual per-PDF Excel files
+                    for file in os.listdir(output_folder):
+                        if file.endswith(".xlsx") and file != "All_Merged_Output.xlsx":
+                            try:
+                                os.remove(os.path.join(output_folder, file))
+                            except Exception as del_err:
+                                print(f"⚠️ Could not delete {file}: {del_err}")
+
+                    print("🧹 Cleaned up individual Excel files. Only merged file kept.")
+
+                    # ---------------- Insert merged file into SQL ----------------
+                    try:
+                        engine, table_name = insert_excel_to_sql(
+                            merged_excel_path,
+                            exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                        )
+                        if engine is not None and table_name is not None:
+                            print(f"📥 Inserted merged data into SQL table: {table_name}")
+                            try:
+                                add_flags(engine, table_name)
+                                print(f"✅ Flags updated in merged table: {table_name}")
+                            except Exception as flag_e:
+                                print(f"❌ Flag update failed for merged table: {flag_e}")
+                    except Exception as sql_e:
+                        print(f"❌ SQL insertion for merged file failed: {sql_e}")
+
+                else:
+                    print("⚠️ No Excel files found to merge.")
+
+    except Exception as e:
+        print(f"❌ Merging step failed: {e}")
+
     # Total timing
     total_elapsed = time.time() - total_start_time
     th, rem = divmod(total_elapsed, 3600)
     tm, ts = divmod(rem, 60)
     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
+
+
+
+
+
+
+
+
+# ---------------------------------------------------
+# --------------Main Loop (Seperate Excel) ----------------
+# ---------------------------------------------------
+# if __name__ == "__main__":
+#     total_start_time = time.time()
+#     checkpoint = load_checkpoint()
+#     pdf_headers_dict = {}
+#     all_voter_details = []
+
+#     # Get all PDFs
+#     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
+#     print(f"📂 Found {len(pdf_files)} PDF files")
+
+#     # Filter already processed PDFs
+#     pdf_files_to_process = []
+#     checkpoint_changed = False
+#     for pdf_file in pdf_files:
+#         pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
+#         output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+
+#         if os.path.exists(output_pdf_excel):
+#             print(f"✔️ Skipping already processed PDF: {pdf_name}")
+#             if pdf_name in checkpoint:
+#                 del checkpoint[pdf_name]
+#                 checkpoint_changed = True
+#         else:
+#             pdf_files_to_process.append(pdf_file)
+
+#     # Save checkpoint if changed
+#     if checkpoint_changed:
+#         if checkpoint:
+#             with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+#                 json.dump(checkpoint, f, indent=2)
+#         elif os.path.exists(CHECKPOINT_FILE):
+#             os.remove(CHECKPOINT_FILE)
+
+#     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
+
+#     try:
+#         for pdf_file in pdf_files_to_process:  # ✅ Only unprocessed PDFs
+#             start_time = time.time()
+#             pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
+#             print(f"\n📄 Processing: {pdf_name}")
+
+#             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
+#             pdf_voter_details = []
+
+#            # ---------------- Process Pages with Per-Page Section Info ----------------
+#             with fitz.open(pdf_file) as doc:
+#                 total_pages = len(doc)
+#                 pages_to_iterate = list(range(1, 14))  # all pages
+
+#                 if pdf_name in checkpoint:
+#                     last_done = checkpoint[pdf_name]["last_page"]
+#                     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}")
+#                     old_emergency = checkpoint[pdf_name]["temp_excel"]
+#                     if os.path.exists(old_emergency):
+#                         df_existing = pd.read_excel(old_emergency, dtype=str)
+#                         df_existing = df_existing.fillna('')
+#                         pdf_voter_details.extend(df_existing.to_dict("records"))
+#                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
+
+#                 for page_num in pages_to_iterate:
+#                     page = doc[page_num - 1]
+#                     pix = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
+#                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+#                     header_crop = img.crop((0, 0, img.width, int(118 * zoom_factor)))
+#                     header_text = pytesseract.image_to_string(header_crop, config="--psm 6 -l mar").strip()
+#                     section_no, section_name = extract_section_info(header_text)
+#                     municipal = extract_municipal(header_text)
+#                     prabhag_no, prabhag_name = extract_prabhag_info(header_text)    
+
+#                     if not municipal or not section_no or not section_name:
+#                         print(f"⚠️ Skipping page {page_num} — no header info found.")
+#                         continue
+
+#                     print(f"[Page {page_num}] Section No: {section_no}, Section Name: {section_name}")
+
+#                     pdf_header_info = {
+#                    "Section_No": section_no,
+#                    "Section_Name": section_name,
+#             "Municipal_Corporation": municipal,
+#             "Prabhag_No": prabhag_no,
+#             "Prabhag_Name": prabhag_name,
+#                    "File_Name": os.path.basename(pdf_file),
+#                    "Raw_Header_Text": header_text
+#                }
+
+#                     save_cards_dir = os.path.join("saved_cards", pdf_name)
+#                     page_voters = process_page(
+#     pdf_file,
+#     page_num,
+#     zoom_factor,
+#     pdf_header_info=pdf_header_info,
+#     save_cards_dir=save_cards_dir
+# )
+
+#                     if page_voters:
+#                         pdf_voter_details.extend(page_voters)
+#                         save_checkpoint(pdf_name, page_num, temp_excel)
+
+
+#             # ---------------- Save Excel + Insert to SQL ----------------
+#             if pdf_voter_details:
+#                 df_pdf = pd.DataFrame(pdf_voter_details)
+#                 if column_order:
+#                     ordered_cols = [col for col in column_order if col in df_pdf.columns]
+#                     other_cols = [col for col in df_pdf.columns if col not in ordered_cols]
+#                     df_pdf = df_pdf[ordered_cols + other_cols]
+
+#                 for col in df_pdf.columns:
+#                     df_pdf[col] = df_pdf[col].astype(str)
+
+#                 output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+#                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
+#                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
+
+#                 # SQL Insertion
+#                 try:
+#                     engine, table_name = insert_excel_to_sql(
+#                         output_pdf_excel,
+#                         exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+#                     )
+#                     if engine is not None and table_name is not None:
+#                         print(f"📥 Inserted into SQL Server table: {table_name}")
+#                         try:
+#                             add_flags(engine, table_name)
+#                             print(f"✅ Flags updated in table: {table_name}")
+#                         except Exception as flag_e:
+#                             print(f"❌ Flag update failed: {flag_e}")
+#                 except Exception as e:
+#                     print(f"❌ SQL insertion failed: {e}")
+
+#                 # Cleanup checkpoint and emergency file
+#                 temp_file = checkpoint.get(pdf_name, {}).get("temp_excel")
+#                 if temp_file and os.path.exists(temp_file):
+#                     os.remove(temp_file)
+#                     print(f"🗑️ Deleted emergency file: {temp_file}")
+
+#                 # Remove this PDF from checkpoint
+#                 if pdf_name in checkpoint:
+#                     del checkpoint[pdf_name]
+
+#                 # Save or delete checkpoint file
+#                 if checkpoint:
+#                     with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+#                         json.dump(checkpoint, f, indent=2)
+#                 else:
+#                     if os.path.exists(CHECKPOINT_FILE):
+#                         os.remove(CHECKPOINT_FILE)
+#                     print(f"🗑️ Deleted checkpoint file (all done)")
+
+#             else:
+#                 print(f"⚠️ No data extracted from {pdf_name}.")
+
+#             # Timing
+#             elapsed_time = time.time() - start_time
+#             h, rem = divmod(elapsed_time, 3600)
+#             m, s = divmod(rem, 60)
+#             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
+
+#     except KeyboardInterrupt:
+#         print("\n⚠️ Interrupted by user. Saving emergency progress...")
+#         save_progress(pdf_voter_details, column_order, temp_excel)
+#         print("💾 Emergency file saved.")
+
+#     except Exception as e:
+#         print(f"\n❌ Unexpected error: {e}")
+#         save_progress(pdf_voter_details, column_order, temp_excel)
+#         print("💾 Emergency file saved due to error.")
+
+#     # Total timing
+#     total_elapsed = time.time() - total_start_time
+#     th, rem = divmod(total_elapsed, 3600)
+#     tm, ts = divmod(rem, 60)
+#     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
