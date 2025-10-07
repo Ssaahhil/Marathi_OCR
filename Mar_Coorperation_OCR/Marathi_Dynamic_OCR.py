@@ -632,39 +632,6 @@ def extract_voter_name(text):
 # ---------------------------------------------------------------
 # =========== Split Marathi Full Name into First/Last ===========
 # ----------------------------------------------------------------
-# def split_relation_name(full_name):
-#     words = full_name.strip().split()
-#     first = words[1] if len(words) >= 2 else ""
-#     last = words[0] if words else ""
-#     # debug_log(f"[NAME_SPLIT] First={first}, Last={last}")
-#     return first, last
-
-# def split_voter_name(full_name: str):
-#     """
-#     Split Marathi full name into First, Last, Middle.
-#     Convention: <Last> <First> <Middle/Father's Name>
-#     Example: 'पाटील सुरेश महादेव' -> First='सुरेश', Last='पाटील', Middle='महादेव'
-#     """
-#     words = full_name.strip().split()
-    
-#     if not words:
-#         return "", "", ""
-    
-#     if len(words) == 1:
-#         # Only one word: assume it's the first name
-#         return words[0], "", ""
-    
-#     if len(words) == 2:
-#         # Two words: assume <Last> <First>
-#         last, first = words
-#         return first, last, ""
-    
-#     # Three or more words: assume <Last> <First> <Middle...>
-#     last, first, *middle = words
-#     middle = " ".join(middle)  # Join remaining words in case of 4+
-    
-#     return first, last, middle
-
 def split_voter_name(full_name: str):
     """
     Split Marathi full name into First, Last, Middle.
@@ -1473,7 +1440,7 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(28, 29))
+                pages_to_iterate = list(range(1, 14))  # adjust as needed
 
                 # Resume from checkpoint
                 if pdf_name in checkpoint:
@@ -1491,9 +1458,16 @@ if __name__ == "__main__":
                         pdf_voter_details.extend(page_voters)
                         save_checkpoint(pdf_name, page_num, temp_excel)
 
-            # ---------------- Final Save + SQL Insert ----------------
+            # ---------------- Final Save per PDF ----------------
             if pdf_voter_details:
-                all_voter_details.extend(pdf_voter_details)  # ✅ FIXED INDENT
+                all_voter_details.extend(pdf_voter_details)
+
+                # ✅ Save individual PDF Excel
+                pdf_excel_path = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+                df_pdf = pd.DataFrame(pdf_voter_details)
+                df_pdf = df_pdf.fillna('').astype(str)
+                df_pdf.to_excel(pdf_excel_path, index=False, engine="openpyxl")
+                print(f"💾 Saved individual Excel for {pdf_name}: {pdf_excel_path}")
 
                 # Cleanup checkpoint + emergency
                 checkpoint = load_checkpoint()
@@ -1521,19 +1495,30 @@ if __name__ == "__main__":
             m, s = divmod(rem, 60)
             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
 
-        # ---------------- Merge All PDFs ----------------
-        if all_voter_details:
-            print(f"\n📊 Merging data from all PDFs...")
+        # ---------------- Merge All Individual PDF Excels ----------------
+        excel_files = [
+            os.path.join(os.path.dirname(output_excel), f)
+            for f in os.listdir(os.path.dirname(output_excel))
+            if f.lower().endswith(".xlsx")
+            and f != os.path.basename(output_excel)
+            and "Merged" not in f
+            and "emergency" not in f
+        ]
 
-            df_all = pd.DataFrame(all_voter_details)
+        if excel_files:
+            print(f"\n📊 Merging {len(excel_files)} individual Excel files...")
+            df_all = pd.concat([pd.read_excel(f, dtype=str) for f in excel_files], ignore_index=True)
+        else:
+            df_all = pd.DataFrame()
 
+        # ---------------- Save Final Merged Excel + Insert into SQL ----------------
+        if not df_all.empty:
             if column_order:
                 ordered_cols = [col for col in column_order if col in df_all.columns]
                 other_cols = [col for col in df_all.columns if col not in ordered_cols]
                 df_all = df_all[ordered_cols + other_cols]
 
-            df_all = df_all.fillna('')      # Ensure no NaNs
-            df_all = df_all.astype(str)     # Ensure all strings
+            df_all = df_all.fillna('').astype(str)
 
             final_merged_excel = os.path.join(os.path.dirname(output_excel), "All_PDFs_Merged.xlsx")
             df_all.to_excel(final_merged_excel, index=False, engine="openpyxl")
@@ -1554,8 +1539,18 @@ if __name__ == "__main__":
                         print(f"❌ Flag update failed in merged table: {flag_e}")
             except Exception as e:
                 print(f"❌ SQL insertion failed for merged data: {e}")
+
+            # ✅ Delete individual Excel files after successful merge and SQL insertion
+            print("\n🧹 Cleaning up individual Excel files...")
+            for f in excel_files:
+                try:
+                    os.remove(f)
+                    print(f"   🗑️ Deleted: {os.path.basename(f)}")
+                except Exception as del_e:
+                    print(f"   ⚠️ Could not delete {f}: {del_e}")
+
         else:
-            print("⚠️ No voter details found in any PDF.")
+            print("⚠️ No voter details found in any PDF or Excel merge failed.")
 
     except KeyboardInterrupt:
         print("\n⚠️ Process interrupted by user! Saving emergency progress...")
@@ -1572,10 +1567,6 @@ if __name__ == "__main__":
     th, rem = divmod(total_elapsed, 3600)
     tm, ts = divmod(rem, 60)
     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
-
-
-
-
 
 
 
