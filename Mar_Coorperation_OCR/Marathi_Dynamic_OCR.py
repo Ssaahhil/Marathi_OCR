@@ -70,7 +70,7 @@ zoom_factor = 3
 # =========== Tesseract OCR Setup ===========
 # --------------------------------------------
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-tesseract_config = "--oem 1 --psm 11 -l mar"
+tesseract_config = "--oem 1 --psm 3 -l mar"
 
 
 # -------------------------------------------
@@ -727,20 +727,67 @@ def split_relation_name(full_name: str, voter_last: str, voter_middle: str):
 # --------------------------------------------------------
 # =========== Extract Relation Type and Name ============
 # --------------------------------------------------------
+# def extract_relation_info(text):
+#     """Extract relation type and full relation name from Marathi OCR text (optimized)."""
+
+#     # --- Normalize lines ---
+#     lines = [l.strip() for l in text.splitlines() if l.strip()]
+#     merged_lines = []
+#     i = 0
+#     while i < len(lines):
+#         line = lines[i]
+
+#         # Case: keyword alone (next line is value)
+#         if RELATION_KEYWORD_ALONE.match(line):
+#             if i + 1 < len(lines):
+#                 next_val = lines[i + 1].strip()
+#                 merged_lines.append(f"{line} {next_val}")
+#                 i += 2
+#                 continue
+
+#         merged_lines.append(line)
+#         i += 1
+
+#     clean_text = "\n".join(merged_lines)
+
+#     # --- Regex patterns for relation types ---
+#     for r_type, pattern in RELATION_PATTERNS.items():
+#         match = pattern.search(clean_text)
+#         if match:
+#             relation_name = match.group(1).lstrip()   # remove leading spaces
+#             relation_name = clean_name(relation_name, max_words=2)
+#             relation_name = correct_name_with_dict(relation_name)
+#             return r_type, relation_name
+
+#     return "", ""
+
 def extract_relation_info(text):
     """Extract relation type and full relation name from Marathi OCR text (optimized)."""
 
     # --- Normalize lines ---
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # Stop processing if we reach house number
+    stop_pattern = re.compile(r"(घर\s*क्रमांक|घर\s*क्र\.?|घर\s*नं\.?|House\s*No)", re.IGNORECASE)
+
     merged_lines = []
     i = 0
     while i < len(lines):
         line = lines[i]
 
+        # --- STOP if house number line appears ---
+        if stop_pattern.search(line):
+            break
+
         # Case: keyword alone (next line is value)
         if RELATION_KEYWORD_ALONE.match(line):
             if i + 1 < len(lines):
                 next_val = lines[i + 1].strip()
+
+                # stop if next line itself is house number
+                if stop_pattern.search(next_val):
+                    break
+
                 merged_lines.append(f"{line} {next_val}")
                 i += 2
                 continue
@@ -754,7 +801,7 @@ def extract_relation_info(text):
     for r_type, pattern in RELATION_PATTERNS.items():
         match = pattern.search(clean_text)
         if match:
-            relation_name = match.group(1).lstrip()   # remove leading spaces
+            relation_name = match.group(1).lstrip()  # remove leading spaces
             relation_name = clean_name(relation_name, max_words=2)
             relation_name = correct_name_with_dict(relation_name)
             return r_type, relation_name
@@ -1426,7 +1473,7 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1, 14))
+                pages_to_iterate = list(range(28, 29))
 
                 # Resume from checkpoint
                 if pdf_name in checkpoint:
