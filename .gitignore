@@ -20,3 +20,15 @@ checkpoint.json
 Marathi_Vidhansabha_OCR/Fixed_Box_Co_OCR.py
 Marathi_Vidhansabha_OCR/Output/MotherRollList_139_Part_42.xlsx
 Marathi_Vidhansabha_OCR/Output/MotherRollList_139_Part_43.xlsx
+Mar_Coorperation_OCR/Marathi_Fixed_OCR.py
+Mar_Coorperation_OCR/Output_Sample/
+Corporation_wise_prefix.xlsx
+Mar_Coorperation_OCR/insert.py
+cards_output/
+debug_full_page_1.png
+debug_table_region_1.png
+extracted_marathi_text_combined.txt
+extracted_table_clean_combined.xlsx
+output_ac140.xlsx
+table_output/
+extracted_table_clean_combined.xlsx

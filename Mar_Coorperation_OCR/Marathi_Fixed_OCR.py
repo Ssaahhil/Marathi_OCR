@@ -836,20 +836,67 @@ def split_relation_name(full_name: str, voter_last: str, voter_middle: str):
 # --------------------------------------------------------
 # =========== Extract Relation Type and Name ============
 # --------------------------------------------------------
+# def extract_relation_info(text):
+#     """Extract relation type and full relation name from Marathi OCR text (optimized)."""
+
+#     # --- Normalize lines ---
+#     lines = [l.strip() for l in text.splitlines() if l.strip()]
+#     merged_lines = []
+#     i = 0
+#     while i < len(lines):
+#         line = lines[i]
+
+#         # Case: keyword alone (next line is value)
+#         if RELATION_KEYWORD_ALONE.match(line):
+#             if i + 1 < len(lines):
+#                 next_val = lines[i + 1].strip()
+#                 merged_lines.append(f"{line} {next_val}")
+#                 i += 2
+#                 continue
+
+#         merged_lines.append(line)
+#         i += 1
+
+#     clean_text = "\n".join(merged_lines)
+
+#     # --- Regex patterns for relation types ---
+#     for r_type, pattern in RELATION_PATTERNS.items():
+#         match = pattern.search(clean_text)
+#         if match:
+#             relation_name = match.group(1).lstrip()   # remove leading spaces
+#             relation_name = clean_name(relation_name, max_words=2)
+#             relation_name = correct_name_with_dict(relation_name)
+#             return r_type, relation_name
+
+#     return "", ""
+
 def extract_relation_info(text):
     """Extract relation type and full relation name from Marathi OCR text (optimized)."""
 
     # --- Normalize lines ---
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # Stop processing if we reach house number
+    stop_pattern = re.compile(r"(घर\s*क्रमांक|घर\s*क्र\.?|घर\s*नं\.?|House\s*No)", re.IGNORECASE)
+
     merged_lines = []
     i = 0
     while i < len(lines):
         line = lines[i]
 
+        # --- STOP if house number line appears ---
+        if stop_pattern.search(line):
+            break
+
         # Case: keyword alone (next line is value)
         if RELATION_KEYWORD_ALONE.match(line):
             if i + 1 < len(lines):
                 next_val = lines[i + 1].strip()
+
+                # stop if next line itself is house number
+                if stop_pattern.search(next_val):
+                    break
+
                 merged_lines.append(f"{line} {next_val}")
                 i += 2
                 continue
@@ -863,13 +910,12 @@ def extract_relation_info(text):
     for r_type, pattern in RELATION_PATTERNS.items():
         match = pattern.search(clean_text)
         if match:
-            relation_name = match.group(1).lstrip()   # remove leading spaces
+            relation_name = match.group(1).lstrip()  # remove leading spaces
             relation_name = clean_name(relation_name, max_words=2)
             relation_name = correct_name_with_dict(relation_name)
             return r_type, relation_name
 
     return "", ""
-
 
 # --------------------------------------------------------
 # =========== Limit Relation Name to 2 Words ============
@@ -1565,9 +1611,6 @@ if __name__ == "__main__":
     pdf_headers_dict = {}
     all_voter_details = []
 
-    # # Input/output folders
-    # pdf_folder = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Input_Pdf"
-    # output_excel = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Output_Sample\combined_output.xlsx"
 
     # Get all PDFs
     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
