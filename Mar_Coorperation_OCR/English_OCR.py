@@ -910,6 +910,74 @@ def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
         return None, None
     
 
+def add_flags(engine, table_name):
+    """Add a Flag column and update values based on duplicates of New_Voter_ID and missing EPIC_Number."""
+    with engine.begin() as conn:
+        # Add Flag column if not exists
+        conn.execute(text(f"""
+            IF COL_LENGTH('{table_name}', 'Flag') IS NULL
+                ALTER TABLE {table_name} ADD Flag VARCHAR(255);
+        """))
+
+        # Ensure Missing_Successors column exists
+        conn.execute(text(f"""
+            IF COL_LENGTH('{table_name}', 'Missing_Successors') IS NULL
+            BEGIN
+                ALTER TABLE {table_name}
+                ADD Missing_Successors INT NULL;
+            END
+        """))
+
+        # Update Missing_Successors - optional if you want it
+        conn.execute(text(f"""
+        ;WITH Sorted AS (
+            SELECT New_Voter_ID,
+                   LEAD(New_Voter_ID) OVER (ORDER BY New_Voter_ID ASC) AS next_id
+            FROM {table_name}
+        )
+        UPDATE t
+        SET Missing_Successors = CASE 
+                                    WHEN s.next_id - t.New_Voter_ID > 1 
+                                    THEN s.next_id - t.New_Voter_ID - 1
+                                    ELSE 0
+                                  END
+        FROM {table_name} t
+        JOIN Sorted s
+          ON t.New_Voter_ID = s.New_Voter_ID;
+        """))
+
+        # Update Flag for duplicate New_Voter_ID only
+        conn.execute(text(f"""
+        UPDATE t
+        SET Flag = 
+            CASE 
+                WHEN dup_counts.dup_count > 1 THEN 
+                    CONCAT(COALESCE(NULLIF(t.Flag, '') + ',', ''), 'DUPLICATE_NEW_VOTER_ID')
+                ELSE t.Flag
+            END
+        FROM {table_name} t
+        JOIN (
+            SELECT New_Voter_ID, COUNT(*) AS dup_count
+            FROM {table_name}
+            GROUP BY New_Voter_ID
+            HAVING COUNT(*) > 1
+        ) dup_counts ON t.New_Voter_ID = dup_counts.New_Voter_ID;
+        """))
+
+        # Update Flag for missing EPIC_Number
+        conn.execute(text(f"""
+        UPDATE {table_name}
+        SET Flag = 
+            CASE 
+                WHEN (EPIC_Number IS NULL OR LTRIM(RTRIM(EPIC_Number)) = '') THEN
+                    CONCAT(COALESCE(NULLIF(Flag, '') + ',', ''), 'MISSING_EPIC')
+                ELSE Flag
+            END
+        WHERE EPIC_Number IS NULL OR LTRIM(RTRIM(EPIC_Number)) = '';
+        """))
+
+        print(f"✅ Flags updated in table '{table_name}'")
+
 
 # --------------------------------------------
 # ============ Main Execution ================
@@ -1001,7 +1069,7 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1, 14) ) # all pages
+                pages_to_iterate = list(range(1, 11) ) # all pages
 
                 if pdf_name in checkpoint:
                     last_done = checkpoint[pdf_name]["last_page"]
@@ -1035,11 +1103,18 @@ if __name__ == "__main__":
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
                 # Insert into SQL: DB = Municipality, Table = Ward
+                # Insert into SQL: DB = Municipality, Table = Ward
                 try:
-                    insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-                    print("📥 Data successfully inserted into SQL Server!")
+                    engine, table_name = insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
+                    if engine and table_name:
+                        add_flags(engine, table_name)
+                        print("📥 Data successfully inserted into SQL Server and flags updated!")
+                    else:
+                        print("⚠️ Insert failed or table name missing; skipping flag update.")
                 except Exception as e:
-                    print(f"❌ SQL insertion failed: {e}")
+                    print(f"❌ SQL insertion or flag update failed: {e}")
+
+
 
                 # Cleanup checkpoint + emergency
                 checkpoint = load_checkpoint()
@@ -1084,212 +1159,3 @@ if __name__ == "__main__":
     tm, ts = divmod(rem, 60)
     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
     
-
-
-# ---------------------------------------------------------------
-# ============ Main Execution with Merge excel ============
-# ---------------------------------------------------------------
-# if __name__ == "__main__":
-#     total_start_time = time.time()
-#     checkpoint = load_checkpoint()
-#     pdf_headers_dict = {}
-#     import paddle
-
-#     # ---------------- GPU / CPU Status ----------------
-#     if paddle.is_compiled_with_cuda():
-#         print(f"✅ GPU available. Current device: {paddle.get_device()}")
-#         print(f"Number of GPUs detected: {paddle.device.cuda.device_count()}")
-#         print("🚀 PaddlePaddle is using GPU!")
-#     else:
-#         print("⚠️ No GPU detected, using CPU")
-#         print("⚠️ PaddlePaddle is running on CPU")
-
-#     # ---------------- Load PDFs ----------------
-#     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
-#     print(f"📂 Found {len(pdf_files)} PDF files")
-
-#     # ---------------- Filter Already Processed ----------------
-#     pdf_files_to_process = []
-#     checkpoint_changed = False
-#     for pdf_file in pdf_files:
-#         pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
-#         output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-
-#         if os.path.exists(output_pdf_excel):
-#             print(f"✔️ Skipping already processed PDF: {pdf_name}")
-#             if pdf_name in checkpoint:
-#                 del checkpoint[pdf_name]
-#                 checkpoint_changed = True
-#         else:
-#             pdf_files_to_process.append(pdf_file)
-
-#     if checkpoint_changed:
-#         if checkpoint:
-#             with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-#                 json.dump(checkpoint, f, indent=2)
-#         elif os.path.exists(CHECKPOINT_FILE):
-#             os.remove(CHECKPOINT_FILE)
-
-#     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
-
-#     # ---------------- Process Each PDF ----------------
-#     try:
-#         for pdf_file in pdf_files_to_process:
-#             start_time = time.time()
-#             pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
-#             print(f"\n📄 Processing: {pdf_name}")
-
-#             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
-#             pdf_voter_details = []
-
-#             # ===== Header Extraction =====
-#             pdf_header_info = {}
-#             header_extracted = False
-#             with fitz.open(pdf_file) as doc:
-#                 for page_number in range(1, 20):
-#                     page = doc[page_number - 1]
-#                     pix_low = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
-#                     img_low = Image.frombytes("RGB", [pix_low.width, pix_low.height], pix_low.samples)
-
-#                     if card_is_present(img_low):
-#                         print(f"✅ Card found on page {page_number} of {pdf_name}. Extracting header...")
-#                         pix_full = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
-#                         img_full = Image.frombytes("RGB", [pix_full.width, pix_full.height], pix_full.samples)
-#                         hdr = extract_header_info(img_full, top_margin=118.0, zoom_factor=zoom_factor)
-#                         pdf_header_info = {
-#                             "Municipal_Corporation": hdr.get("Municipal_Corporation", ""),
-#                             "Prabhag_No": hdr.get("Prabhag_No", ""),
-#                             "Prabhag_Name": hdr.get("Prabhag_Name", ""),
-#                             "File_Name": os.path.basename(pdf_file)
-#                         }
-#                         header_extracted = True
-#                         break
-
-#             if not header_extracted:
-#                 print(f"⚠️ No cards found in {pdf_name}. Skipping header.")
-#             else:
-#                 print(f"📑 Extracted PDF-level header for {pdf_name}: {pdf_header_info}")
-
-#             pdf_headers_dict[pdf_name] = pdf_header_info
-
-#             # ===== Process Pages =====
-#             with fitz.open(pdf_file) as doc:
-#                 total_pages = len(doc)
-#                 pages_to_iterate = list(range(1, 14))
-#                 serial_counter = 1
-
-#                 if pdf_name in checkpoint:
-#                     last_done = checkpoint[pdf_name]["last_page"]
-#                     serial_counter = checkpoint[pdf_name].get("serial_counter", 1)
-#                     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}, serial {serial_counter}")
-#                     old_emergency = checkpoint[pdf_name]["temp_excel"]
-#                     if os.path.exists(old_emergency):
-#                         df_existing = pd.read_excel(old_emergency, dtype=str)
-#                         df_existing = df_existing.reindex(columns=column_order, fill_value="")
-#                         pdf_voter_details.extend(df_existing.to_dict("records"))
-#                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
-
-#                 for page_num in pages_to_iterate:
-#                     page_voters, serial_counter = process_page(pdf_file, page_num, zoom_factor, pdf_header_info, serial_counter)
-#                     if page_voters:
-#                         pdf_voter_details.extend(page_voters)
-#                         save_checkpoint(pdf_name, page_num, temp_excel, serial_counter)
-
-#             # ===== Save Individual Excel =====
-#             if pdf_voter_details:
-#                 df_pdf = pd.DataFrame(pdf_voter_details)
-#                 df_pdf = df_pdf.reindex(columns=column_order, fill_value="")
-#                 df_pdf = df_pdf.astype(str)
-#                 output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-#                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
-#                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
-
-#                 # Cleanup checkpoint & temp
-#                 checkpoint = load_checkpoint()
-#                 if pdf_name in checkpoint:
-#                     temp_file = checkpoint[pdf_name].get("temp_excel")
-#                     if temp_file and os.path.exists(temp_file):
-#                         os.remove(temp_file)
-#                         print(f"🗑️ Deleted emergency file for completed PDF: {temp_file}")
-#                     del checkpoint[pdf_name]
-
-#                     if checkpoint:
-#                         with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-#                             json.dump(checkpoint, f, indent=2)
-#                         print(f"✅ Updated checkpoint after finishing {pdf_name}")
-#                     elif os.path.exists(CHECKPOINT_FILE):
-#                         os.remove(CHECKPOINT_FILE)
-#                         print(f"🗑️ Deleted checkpoint file as all PDFs are processed")
-
-#                 # ✅ Delete processed PDF file after success
-#                 if os.path.exists(pdf_file):
-#                     os.remove(pdf_file)
-#                     print(f"🗑️ Deleted processed PDF: {pdf_file}")
-
-#             else:
-#                 print(f"⚠️ No data extracted from {pdf_name}.")
-
-#             elapsed_time = time.time() - start_time
-#             h, rem = divmod(elapsed_time, 3600)
-#             m, s = divmod(rem, 60)
-#             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
-
-#     except KeyboardInterrupt:
-#         print("\n⚠️ Interrupted by user. Saving emergency progress...")
-#         save_progress(pdf_voter_details, column_order, temp_excel)
-#         print("💾 Emergency file saved.")
-#     except Exception as e:
-#         print(f"\n❌ Unexpected error: {e}")
-#         save_progress(pdf_voter_details, column_order, temp_excel)
-#         print("💾 Emergency file saved due to error.")
-
-#     # ---------------- Merge All Excel Files ----------------
-#     try:
-#         print("\n📦 Merging all generated Excel files...")
-#         output_folder = os.path.dirname(output_excel)
-#         merged_df = pd.DataFrame()
-
-#         for file in os.listdir(output_folder):
-#             if file.endswith(".xlsx") and not file.endswith("_emergency.xlsx") and "All_Merged_Output" not in file:
-#                 file_path = os.path.join(output_folder, file)
-#                 df = pd.read_excel(file_path, dtype=str)
-#                 merged_df = pd.concat([merged_df, df], ignore_index=True)
-
-#         if not merged_df.empty:
-#             merged_excel_path = os.path.join(output_folder, "All_Merged_Output.xlsx")
-#             merged_df.to_excel(merged_excel_path, index=False, engine="openpyxl")
-#             print(f"✅ Merged Excel saved at: {merged_excel_path}")
-
-#             # 🧹 Delete all individual Excel files
-#             for file in os.listdir(output_folder):
-#                 if file.endswith(".xlsx") and file != "All_Merged_Output.xlsx":
-#                     try:
-#                         os.remove(os.path.join(output_folder, file))
-#                     except Exception as del_err:
-#                         print(f"⚠️ Could not delete {file}: {del_err}")
-
-#             print("🧹 Cleaned up individual Excel files. Only merged file kept.")
-
-#             # ---------------- Insert Merged File into SQL ----------------
-#             try:
-#                 engine, table_name = insert_excel_to_sql(
-#                     merged_excel_path,
-#                     exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
-#                 )
-#                 if engine is not None and table_name is not None:
-#                     print(f"📥 Inserted merged data into SQL table: {table_name}")
-                    
-#             except Exception as sql_e:
-#                 print(f"❌ SQL insertion for merged file failed: {sql_e}")
-
-#         else:
-#             print("⚠️ No Excel files found to merge.")
-#     except Exception as e:
-#         print(f"❌ Merging step failed: {e}")
-
-#     # ---------------- Total Time ----------------
-#     total_elapsed = time.time() - total_start_time
-#     th, rem = divmod(total_elapsed, 3600)
-#     tm, ts = divmod(rem, 60)
-#     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
-
