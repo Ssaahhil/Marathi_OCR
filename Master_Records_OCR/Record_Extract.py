@@ -171,7 +171,7 @@ def extract_table_from_pdf(pdf_path, page_num=0, save_debug=True):
         table_image.save(f"debug_table_region_{page_num + 1}.png")
 
     print("🔍 Running OCR...")
-    text, processed_img = extract_text_with_layout(table_image)
+    text, image = extract_text_with_layout(table_image)
     text = convert_marathi_digits(text)
 
     print("\n📝 Extracted Text:\n", text)
@@ -181,9 +181,19 @@ def extract_table_from_pdf(pdf_path, page_num=0, save_debug=True):
     return text, table_rows, specific_data
 
 if __name__ == "__main__":
-    folder_path = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\testing_pdfs"
-    output_txt = "extracted_marathi_text_combined.txt"
-    output_excel = "extracted_table_clean_combined.xlsx"
+
+    folder_path = r"D:\Corporation_Ambarnath_Prabhag\Draft List"
+
+    files = os.listdir(folder_path)
+    pdf_files = [f for f in files if f.endswith('.pdf')]
+    pdf_files = sorted(pdf_files)  # Optional: Sort alphabetically
+
+    print("PDFs found in folder:")
+    for idx, file in enumerate(pdf_files):
+        print(f"{idx + 1}. {file}")
+
+    output_txt = "AMC_text_combined.txt"
+    output_excel = "AMC_table_clean_combined.xlsx"
 
     all_table_dfs = []
     all_voter_dicts = []
@@ -213,18 +223,20 @@ if __name__ == "__main__":
             df = create_clean_dataframe(table_rows)
 
             if not df.empty:
-                df['file_name'] = file_name
-                df['ward_no'] = ward_no
-                df['ulb_name'] = ulb_name
+                df['File_name'] = file_name
+                df['Ward_no'] = ward_no
+                df['ULB_name'] = ulb_name
                 # Reorder columns
-                desired_order = ['file_name', 'ward_no', 'ulb_name'] + [col for col in df.columns if col not in ['file_name', 'ward_no', 'ulb_name']]
+                desired_order = ['File_name', 'Ward_no', 'ULB_name'] + [
+                    col for col in df.columns if col not in ['File_name', 'Ward_no', 'ULB_name']
+                ]
                 df = df[desired_order]
                 all_table_dfs.append(df)
 
             if specific_data:
-                specific_data['file_name'] = file_name
-                specific_data['ward_no'] = ward_no
-                specific_data['ulb_name'] = ulb_name
+                specific_data['File_name'] = file_name
+                specific_data['Ward_no'] = ward_no
+                specific_data['ULB_name'] = ulb_name
                 all_voter_dicts.append(specific_data)
 
     # Combine all tables
@@ -236,7 +248,7 @@ if __name__ == "__main__":
     # Combine all voter data dicts into a DataFrame
     if all_voter_dicts:
         voter_df = pd.DataFrame(all_voter_dicts)
-        desired_order_counts = ['file_name', 'ward_no', 'ulb_name', 'पुरुष', 'स्त्री', 'इतर', 'एकूण_निव्वळ_मतदार']
+        desired_order_counts = ['File_name', 'Ward_no', 'ULB_name', 'पुरुष', 'स्त्री', 'इतर', 'एकूण_निव्वळ_मतदार']
         desired_order_counts = [col for col in desired_order_counts if col in voter_df.columns]
         voter_df = voter_df[desired_order_counts]
     else:
@@ -255,3 +267,62 @@ if __name__ == "__main__":
     else:
         print("⚠️ No data to save to Excel.")
 
+    # ================================
+    # SQL Insertion Section
+    # ================================
+    import pyodbc
+
+    # Connection string using SQL Authentication
+    connection_string = (
+        "Driver={ODBC Driver 17 for SQL Server};"
+        "Server=ORNET96;"                       # Example: ORNET96\SQLEXPRESS if named instance
+        "Database=Coorp_Ward_Master;"
+        "UID=sa;"                               # Your SQL username
+        "PWD=manager;"                          # Your SQL password
+    )
+
+    # Merge both dataframes into one combined
+    if not combined_df.empty and not voter_df.empty:
+        merged_df = pd.merge(
+            combined_df,
+            voter_df,
+            on=['File_name', 'Ward_no', 'ULB_name'],
+            how='outer'
+        )
+    elif not combined_df.empty:
+        merged_df = combined_df.copy()
+    elif not voter_df.empty:
+        merged_df = voter_df.copy()
+    else:
+        merged_df = pd.DataFrame()
+
+    if merged_df.empty:
+        print("⚠️ No data available to insert into SQL.")
+    else:
+        print(f"🗄️ Preparing to insert {len(merged_df)} records into SQL...")
+
+        import pyodbc
+        conn = pyodbc.connect(connection_string)
+        cursor = conn.cursor()
+
+        table_name = "Ward_Master_Coorp"  # change if needed
+
+        # Create table if not exists
+        columns_with_types = ", ".join([f"[{col}] NVARCHAR(MAX)" for col in merged_df.columns])
+        create_query = f"""
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='{table_name}' AND xtype='U')
+        CREATE TABLE {table_name} ({columns_with_types})
+        """
+        cursor.execute(create_query)
+
+        # Insert all data
+        placeholders = ", ".join(["?"] * len(merged_df.columns))
+        insert_query = f"INSERT INTO {table_name} ({', '.join(merged_df.columns)}) VALUES ({placeholders})"
+
+        for _, row in merged_df.iterrows():
+            cursor.execute(insert_query, tuple(str(x) for x in row))
+
+        conn.commit()
+        conn.close()
+
+        print(f"✅ All combined data successfully inserted into SQL table: {table_name}")

@@ -23,12 +23,12 @@ logging.getLogger("ppocr").setLevel(logging.WARNING)
 # --------------------------------------------
 # =========== SQL Serve DB Config =============
 # --------------------------------------------
-DB_SERVER = "ORNET96"
+DB_SERVER = "ORNET91"
 DB_DRIVER = "ODBC Driver 17 for SQL Server"
 
 DB_USER = "sa"                  # SQL Server username
 DB_PASS = "manager"    # SQL Server password
-DB_NAME = "KDMC"                # Default database (can be overridden)
+DB_NAME = "KBMC"                # Default database (can be overridden)
 TABLE_NAME = "Ward_Unknown" 
 
 # Build connection string (ODBC)
@@ -132,10 +132,10 @@ RELATION_KEYWORD_ALONE = re.compile(
 )
 
 RELATION_PATTERNS = {
-    "Husband": re.compile(r"(?:पतीचे नाव|पततीचे नाव|पत्तीचे नाव)\s*[:：;]?\s*(.+)"),
-    "Father":  re.compile(r"(?:वडिलांचे नाव|वडील|बिलांचे नात)\s*[:：;]?\s*(.+)"),
-    "Mother":  re.compile(r"(?:आईचे नाव)\s*[:：;]?\s*(.+)"),
-    "Other":   re.compile(r"(?:ईतर|इतर)\s*[:：;]?\s*(.+)")
+    "HSBN": re.compile(r"(?:पतीचे नाव|पततीचे नाव|पत्तीचे नाव)\s*[:：;]?\s*(.+)"),
+    "FTHR":  re.compile(r"(?:वडिलांचे नाव|वडील|बिलांचे नात)\s*[:：;]?\s*(.+)"),
+    "MTHR":  re.compile(r"(?:आईचे नाव)\s*[:：;]?\s*(.+)"),
+    "OTHR":   re.compile(r"(?:ईतर|इतर)\s*[:：;]?\s*(.+)")
 }
 
 # -------------------------------------------------------------
@@ -181,7 +181,7 @@ LIST_NO_SEARCH   = re.compile(r"\d{1,3}/(\d{1,5})/\d{1,5}\b")
 SERIAL_NO_SEARCH = re.compile(r"\d{1,3}/\d{1,5}/(\d{1,5})\b")
 LEADING_DIGITS   = re.compile(r"^(\d+)")
 NON_DIGITS_SLASH     = re.compile(r"[^0-9/]")  # cleanup
-
+DIGIT_PATTERN = re.compile(r"[0-9०-९]")
 
 # ================================================================
 # ============ HELPERS =================
@@ -269,12 +269,18 @@ def card_is_present(image, min_cards=1):
 # --------------------------------------------------------------------------
 # =============== Municipal Coorporation Extractors ==========================
 # --------------------------------------------------------------------------
-def extract_municipal(header_text):
-    # match = re.search(r"([^\s]+)\s*महानगरपालिका", header_text)
-    match = re.search(r"(.+?)\s*महानगरपालिका", header_text)
-    municipal = match.group(1).strip() if match else ""
-    # debug_log(f"[MUNICIPAL] {municipal}")
-    return municipal
+# def extract_municipal(header_text):
+#     # match = re.search(r"([^\s]+)\s*महानगरपालिका", header_text)
+#     match = re.search(r"(.+?)\s*महानगरपालिका", header_text)
+#     municipal = match.group(1).strip() if match else ""
+#     # debug_log(f"[MUNICIPAL] {municipal}")
+#     return municipal
+
+def extract_nagar_parishad(header_text):
+    match = re.search(r"(.+?)\s*नगर परिषद", header_text)
+    nagar_parishad = match.group(1).strip() if match else ""
+    return nagar_parishad
+
 
 
 # ------------------------------------------------------------------------
@@ -452,13 +458,13 @@ def extract_header_info(page_img, top_margin, zoom_factor):
     header_crop = page_img.crop((0, 0, page_img.width, int(top_margin * zoom_factor)))
     header_text = pytesseract.image_to_string(header_crop, config="--psm 6 -l mar").strip()
     # debug_log(f"[HEADER RAW]\n{header_text}")
-    municipal = extract_municipal(header_text)
+    nagar_parishad = extract_nagar_parishad(header_text)
     section_no, section_name = extract_section_info(header_text)
     # booth_name = extract_booth_name(header_text)
     # booth_address = extract_booth_address(header_text)
     prabhag_no, prabhag_name = extract_prabhag_info(header_text)
     return {
-        "Municipal_Corporation": municipal,
+        "Municipal_Corporation": nagar_parishad,
         "Prabhag_No": prabhag_no,
         "Prabhag_Name": prabhag_name,
         # "Section_No": section_no,
@@ -606,7 +612,7 @@ def clean_tesseract_text(text: str) -> str:
 # =========== Extract Voter Name from Tesseract OCR Text ============
 # ------------------------------------------------------------------
 def extract_voter_name(text):
-    """Extract full voter name from Marathi OCR text (optimized)."""
+    """Extract full voter name from Marathi OCR text (optimized, digits removed)."""
     # Clean basic unwanted chars
     text = text.replace("\n", " ").replace("[", "").replace("]", "").replace("'", "")
     text = MULTISPACE_PATTERN.sub(" ", text).strip()
@@ -621,8 +627,12 @@ def extract_voter_name(text):
     main_text = PUNCT_PATTERN.sub("", main_text).strip()    # remove Marathi punctuation
     main_text = MULTISPACE_PATTERN.sub(" ", main_text)      # collapse spaces
 
-    # Drop numbers/Latin-only tokens
+    # Remove any digits (Marathi or English)
+    main_text = DIGIT_PATTERN.sub("", main_text)
+    
+    # Drop words that are Latin-only
     words = [w for w in main_text.split() if not DIGIT_LATIN_PATTERN.match(w)]
+
     voter_name = " ".join(words[:4])  # keep first 3–4 words
 
     # Apply dictionary correction
@@ -691,45 +701,8 @@ def split_relation_name(full_name: str, voter_last: str, voter_middle: str):
 
     return first, last, voter_middle
 
-# --------------------------------------------------------
-# =========== Extract Relation Type and Name ============
-# --------------------------------------------------------
-# def extract_relation_info(text):
-#     """Extract relation type and full relation name from Marathi OCR text (optimized)."""
-
-#     # --- Normalize lines ---
-#     lines = [l.strip() for l in text.splitlines() if l.strip()]
-#     merged_lines = []
-#     i = 0
-#     while i < len(lines):
-#         line = lines[i]
-
-#         # Case: keyword alone (next line is value)
-#         if RELATION_KEYWORD_ALONE.match(line):
-#             if i + 1 < len(lines):
-#                 next_val = lines[i + 1].strip()
-#                 merged_lines.append(f"{line} {next_val}")
-#                 i += 2
-#                 continue
-
-#         merged_lines.append(line)
-#         i += 1
-
-#     clean_text = "\n".join(merged_lines)
-
-#     # --- Regex patterns for relation types ---
-#     for r_type, pattern in RELATION_PATTERNS.items():
-#         match = pattern.search(clean_text)
-#         if match:
-#             relation_name = match.group(1).lstrip()   # remove leading spaces
-#             relation_name = clean_name(relation_name, max_words=2)
-#             relation_name = correct_name_with_dict(relation_name)
-#             return r_type, relation_name
-
-#     return "", ""
-
 def extract_relation_info(text):
-    """Extract relation type and full relation name from Marathi OCR text (optimized)."""
+    """Extract relation type and full relation name from Marathi OCR text (optimized, digits removed)."""
 
     # --- Normalize lines ---
     lines = [l.strip() for l in text.splitlines() if l.strip()]
@@ -770,11 +743,14 @@ def extract_relation_info(text):
         if match:
             relation_name = match.group(1).lstrip()  # remove leading spaces
             relation_name = clean_name(relation_name, max_words=2)
+
+            # Remove any digits (Marathi or English)
+            relation_name = DIGIT_PATTERN.sub("", relation_name)
+
             relation_name = correct_name_with_dict(relation_name)
             return r_type, relation_name
 
     return "", ""
-
 
 # --------------------------------------------------------
 # =========== Limit Relation Name to 2 Words ============
@@ -860,7 +836,7 @@ def classify_gender(raw_text: str) -> str:
 
 
 def marathi_to_english_gender(normalized_gender: str) -> str:
-    return {"पुरुष": "Male", "स्त्री": "Female", "इतर": "Other"}.get(normalized_gender, "")
+    return {"पुरुष": "M", "स्त्री": "F", "इतर": "O"}.get(normalized_gender, "")
 
 
 # ---------------------------------------------------------------------
@@ -1307,12 +1283,15 @@ def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
 # === Add Flags ===
 def add_flags(engine, table_name):
     """Add a Flag column and update values based on rules."""
+    from sqlalchemy.sql import text
+
     with engine.begin() as conn:
         # Add Flag column if not exists
         conn.execute(text(f"""
             IF COL_LENGTH('{table_name}', 'Flag') IS NULL
                 ALTER TABLE {table_name} ADD Flag VARCHAR(255);
         """))
+
 
         # Ensure Missing_Successors column exists
         conn.execute(text(f"""
@@ -1341,7 +1320,7 @@ def add_flags(engine, table_name):
           ON t.New_Voter_ID = s.New_Voter_ID;
         """))
 
-        # Update Flag column
+        # Update Flag column for all other rules
         conn.execute(text(f"""
         UPDATE {table_name}
         SET Flag = NULLIF(
@@ -1357,12 +1336,28 @@ def add_flags(engine, table_name):
         );
         """))
 
+        # ✅ Add DUPLICATE_VID to Flag where New_Voter_ID occurs more than once
+        conn.execute(text(f"""
+        ;WITH Duplicates AS (
+            SELECT New_Voter_ID
+            FROM {table_name}
+            GROUP BY New_Voter_ID
+            HAVING COUNT(*) > 1
+        )
+        UPDATE t
+        SET Flag = 
+            CASE 
+                WHEN Flag IS NULL THEN 'DUPLICATE_VID'
+                ELSE Flag + ',DUPLICATE_VID'
+            END
+        FROM {table_name} t
+        JOIN Duplicates d ON t.New_Voter_ID = d.New_Voter_ID;
+        """))
+
         print(f"✅ Flags updated in table '{table_name}'")
 
 
-# --------------------------------------------
-# ============ Main Execution (Excel Merge) ================
-# --------------------------------------------
+# ============ Main Execution (with Sepearte excel file Save) ================
 if __name__ == "__main__":
     total_start_time = time.time()
     checkpoint = load_checkpoint()
@@ -1440,7 +1435,7 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1, 14))  # adjust as needed
+                pages_to_iterate = list(range(1,total_pages))  # all pages
 
                 # Resume from checkpoint
                 if pdf_name in checkpoint:
@@ -1458,16 +1453,82 @@ if __name__ == "__main__":
                         pdf_voter_details.extend(page_voters)
                         save_checkpoint(pdf_name, page_num, temp_excel)
 
-            # ---------------- Final Save per PDF ----------------
-            if pdf_voter_details:
-                all_voter_details.extend(pdf_voter_details)
+                    # Emergency save + checkpoint
+                    # if pdf_voter_details:
+                    #     df_tmp = pd.DataFrame(pdf_voter_details)
+                    #     if column_order:
+                    #         ordered_cols = [col for col in column_order if col in df_tmp.columns]
+                    #         other_cols = [col for col in df_tmp.columns if col not in ordered_cols]
+                    #         df_tmp = df_tmp[ordered_cols + other_cols]
 
-                # ✅ Save individual PDF Excel
-                pdf_excel_path = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+                    #     for col in df_tmp.columns:
+                    #         df_tmp[col] = df_tmp[col].astype(str)
+
+                    #     df_tmp.to_excel(temp_excel, index=False, engine="openpyxl")
+                    #     save_checkpoint(pdf_name, page_num, temp_excel)
+                    #     print(f"💾 Emergency save at page {page_num}: {temp_excel}")
+
+            # ---------------- Final Save + SQL Insert ----------------
+            if pdf_voter_details:
                 df_pdf = pd.DataFrame(pdf_voter_details)
-                df_pdf = df_pdf.fillna('').astype(str)
-                df_pdf.to_excel(pdf_excel_path, index=False, engine="openpyxl")
-                print(f"💾 Saved individual Excel for {pdf_name}: {pdf_excel_path}")
+                if column_order:
+                    ordered_cols = [col for col in column_order if col in df_pdf.columns]
+                    other_cols = [col for col in df_pdf.columns if col not in ordered_cols]
+                    df_pdf = df_pdf[ordered_cols + other_cols]
+
+                for col in df_pdf.columns:
+                    df_pdf[col] = df_pdf[col].astype(str)
+
+                output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+                df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
+                print(f"📄 Saved extracted data to: {output_pdf_excel}")
+
+            # if pdf_voter_details:
+            #     # Ensure consistent keys for all rows
+            #     normalized_records = []
+            #     for rec in pdf_voter_details:
+            #         norm = {col: str(rec.get(col, "")) for col in column_order}
+            #         normalized_records.append(norm)
+
+            #     df_pdf = pd.DataFrame(normalized_records)
+
+            #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
+            #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
+            #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
+
+                try:
+                    engine, table_name = insert_excel_to_sql(
+                        output_pdf_excel,
+                        exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                    )
+    
+                    if engine is not None and table_name is not None:
+                        print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
+
+                        # ---------------- Add Flags ----------------
+                        try:
+                            add_flags(engine, table_name)  # Use dynamic table name
+                            print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
+                        except Exception as flag_e:
+                            print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
+
+                except Exception as e:
+                    print(f"❌ SQL insertion failed: {e}")
+
+                # Insert into SQL: DB = Municipality, Table = Ward
+                # try:
+                #     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
+                #     print("📥 Data successfully inserted into SQL Server!")
+                #     # ---------------- Add Flags ----------------
+                #     try:
+                #         from sqlalchemy import create_engine
+                #         engine = create_engine(connection_string, fast_executemany=True)  # Make sure your connection string is correct
+                #         add_flags(engine, "Ward")  # Replace "Ward" with your table name
+                #         print("✅ Flags added/updated successfully in SQL table!")
+                #     except Exception as flag_e:
+                #         print(f"❌ Failed to add/update flags: {flag_e}")
+                # except Exception as e:
+                #     print(f"❌ SQL insertion failed: {e}")
 
                 # Cleanup checkpoint + emergency
                 checkpoint = load_checkpoint()
@@ -1486,6 +1547,7 @@ if __name__ == "__main__":
                         if os.path.exists(CHECKPOINT_FILE):
                             os.remove(CHECKPOINT_FILE)
                         print(f"🗑️ Deleted checkpoint file as all PDFs are processed")
+
             else:
                 print(f"⚠️ No data extracted from {pdf_name}. Skipping file save.")
 
@@ -1494,63 +1556,6 @@ if __name__ == "__main__":
             h, rem = divmod(elapsed_time, 3600)
             m, s = divmod(rem, 60)
             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
-
-        # ---------------- Merge All Individual PDF Excels ----------------
-        excel_files = [
-            os.path.join(os.path.dirname(output_excel), f)
-            for f in os.listdir(os.path.dirname(output_excel))
-            if f.lower().endswith(".xlsx")
-            and f != os.path.basename(output_excel)
-            and "Merged" not in f
-            and "emergency" not in f
-        ]
-
-        if excel_files:
-            print(f"\n📊 Merging {len(excel_files)} individual Excel files...")
-            df_all = pd.concat([pd.read_excel(f, dtype=str) for f in excel_files], ignore_index=True)
-        else:
-            df_all = pd.DataFrame()
-
-        # ---------------- Save Final Merged Excel + Insert into SQL ----------------
-        if not df_all.empty:
-            if column_order:
-                ordered_cols = [col for col in column_order if col in df_all.columns]
-                other_cols = [col for col in df_all.columns if col not in ordered_cols]
-                df_all = df_all[ordered_cols + other_cols]
-
-            df_all = df_all.fillna('').astype(str)
-
-            final_merged_excel = os.path.join(os.path.dirname(output_excel), "All_PDFs_Merged.xlsx")
-            df_all.to_excel(final_merged_excel, index=False, engine="openpyxl")
-            print(f"📄 Final merged Excel saved: {final_merged_excel}")
-
-            # SQL Insertion
-            try:
-                engine, table_name = insert_excel_to_sql(
-                    final_merged_excel,
-                    exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
-                )
-                if engine is not None and table_name is not None:
-                    print(f"📥 Merged data inserted into SQL Server table: {table_name}")
-                    try:
-                        add_flags(engine, table_name)
-                        print(f"✅ Flags updated in merged table: {table_name}")
-                    except Exception as flag_e:
-                        print(f"❌ Flag update failed in merged table: {flag_e}")
-            except Exception as e:
-                print(f"❌ SQL insertion failed for merged data: {e}")
-
-            # ✅ Delete individual Excel files after successful merge and SQL insertion
-            print("\n🧹 Cleaning up individual Excel files...")
-            for f in excel_files:
-                try:
-                    os.remove(f)
-                    print(f"   🗑️ Deleted: {os.path.basename(f)}")
-                except Exception as del_e:
-                    print(f"   ⚠️ Could not delete {f}: {del_e}")
-
-        else:
-            print("⚠️ No voter details found in any PDF or Excel merge failed.")
 
     except KeyboardInterrupt:
         print("\n⚠️ Process interrupted by user! Saving emergency progress...")
@@ -1562,230 +1567,8 @@ if __name__ == "__main__":
         save_progress(pdf_voter_details, column_order, temp_excel)
         print("💾 Emergency file saved due to error.")
 
-    # ---------------- Total timing ----------------
+    # Total timing
     total_elapsed = time.time() - total_start_time
     th, rem = divmod(total_elapsed, 3600)
     tm, ts = divmod(rem, 60)
     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
-
-
-
-
-
-
-
-# ============ Main Execution (with Sepearte excel file Save) ================
-# if __name__ == "__main__":
-#     total_start_time = time.time()
-#     checkpoint = load_checkpoint()
-#     pdf_headers_dict = {}
-#     all_voter_details = []
-
-#     pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.lower().endswith(".pdf")]
-#     print(f"📂 Found {len(pdf_files)} PDF files")
-
-#     # Filter PDFs to process (skip already completed ones)
-#     pdf_files_to_process = []
-#     checkpoint_changed = False
-#     for pdf_file in pdf_files:
-#         pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
-#         output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-
-#         if os.path.exists(output_pdf_excel):
-#             print(f"✔️ Skipping already processed PDF: {pdf_name}")
-#             if pdf_name in checkpoint:
-#                 del checkpoint[pdf_name]
-#                 checkpoint_changed = True
-#         else:
-#             pdf_files_to_process.append(pdf_file)
-
-#     # Update checkpoint file
-#     if checkpoint_changed:
-#         if checkpoint:
-#             with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-#                 json.dump(checkpoint, f, indent=2)
-#         else:
-#             if os.path.exists(CHECKPOINT_FILE):
-#                 os.remove(CHECKPOINT_FILE)
-
-#     print(f"📂 PDFs to process: {len(pdf_files_to_process)}")
-
-#     try:
-#         for pdf_file in pdf_files_to_process:
-#             start_time = time.time()
-#             pdf_name = os.path.splitext(os.path.basename(pdf_file))[0]
-#             print(f"\n📄 Processing: {pdf_name}")
-
-#             temp_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}_emergency.xlsx")
-#             pdf_voter_details = []
-
-#             # ---------------- Extract PDF Header ----------------
-#             pdf_header_info = {}
-#             header_extracted = False
-#             with fitz.open(pdf_file) as doc:
-#                 for page_number in range(1, 20):
-#                     page = doc[page_number - 1]
-#                     pix_low = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
-#                     img_low = Image.frombytes("RGB", [pix_low.width, pix_low.height], pix_low.samples)
-
-#                     if card_is_present(img_low):
-#                         print(f"✅ Card found on page {page_number} of {pdf_name}. Extracting header...")
-#                         pix_full = page.get_pixmap(matrix=fitz.Matrix(zoom_factor, zoom_factor))
-#                         img_full = Image.frombytes("RGB", [pix_full.width, pix_full.height], pix_full.samples)
-#                         hdr = extract_header_info(img_full, top_margin=118.0, zoom_factor=zoom_factor)
-#                         pdf_header_info = {
-#                             "Municipal_Corporation": hdr.get("Municipal_Corporation", ""),
-#                             "Prabhag_No": hdr.get("Prabhag_No", ""),
-#                             "Prabhag_Name": hdr.get("Prabhag_Name", ""),
-#                             "File_Name": os.path.basename(pdf_file)
-#                         }
-#                         header_extracted = True
-#                         break
-
-#             if not header_extracted:
-#                 print(f"⚠️ No cards found in {pdf_name}. Skipping header.")
-#             else:
-#                 print(f"📑 Extracted PDF-level header for {pdf_name}: {pdf_header_info}")
-
-#             pdf_headers_dict[pdf_name] = pdf_header_info
-
-#             # ---------------- Process Pages ----------------
-#             with fitz.open(pdf_file) as doc:
-#                 total_pages = len(doc)
-#                 pages_to_iterate = list(range(1,13))  # all pages
-
-#                 # Resume from checkpoint
-#                 if pdf_name in checkpoint:
-#                     last_done = checkpoint[pdf_name]["last_page"]
-#                     print(f"🔄 Resuming {pdf_name} from page {last_done + 1}")
-#                     old_emergency = checkpoint[pdf_name]["temp_excel"]
-#                     if os.path.exists(old_emergency):
-#                         df_existing = pd.read_excel(old_emergency, dtype=str)
-#                         pdf_voter_details.extend(df_existing.to_dict("records"))
-#                     pages_to_iterate = [p for p in pages_to_iterate if p > last_done]
-
-#                 for page_num in pages_to_iterate:
-#                     page_voters = process_page(pdf_file, page_num, zoom_factor, pdf_header_info)
-#                     if page_voters:
-#                         pdf_voter_details.extend(page_voters)
-#                         save_checkpoint(pdf_name, page_num, temp_excel)
-
-#                     # Emergency save + checkpoint
-#                     # if pdf_voter_details:
-#                     #     df_tmp = pd.DataFrame(pdf_voter_details)
-#                     #     if column_order:
-#                     #         ordered_cols = [col for col in column_order if col in df_tmp.columns]
-#                     #         other_cols = [col for col in df_tmp.columns if col not in ordered_cols]
-#                     #         df_tmp = df_tmp[ordered_cols + other_cols]
-
-#                     #     for col in df_tmp.columns:
-#                     #         df_tmp[col] = df_tmp[col].astype(str)
-
-#                     #     df_tmp.to_excel(temp_excel, index=False, engine="openpyxl")
-#                     #     save_checkpoint(pdf_name, page_num, temp_excel)
-#                     #     print(f"💾 Emergency save at page {page_num}: {temp_excel}")
-
-#             # ---------------- Final Save + SQL Insert ----------------
-#             if pdf_voter_details:
-#                 df_pdf = pd.DataFrame(pdf_voter_details)
-#                 if column_order:
-#                     ordered_cols = [col for col in column_order if col in df_pdf.columns]
-#                     other_cols = [col for col in df_pdf.columns if col not in ordered_cols]
-#                     df_pdf = df_pdf[ordered_cols + other_cols]
-
-#                 for col in df_pdf.columns:
-#                     df_pdf[col] = df_pdf[col].astype(str)
-
-#                 output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-#                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
-#                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
-
-#             # if pdf_voter_details:
-#             #     # Ensure consistent keys for all rows
-#             #     normalized_records = []
-#             #     for rec in pdf_voter_details:
-#             #         norm = {col: str(rec.get(col, "")) for col in column_order}
-#             #         normalized_records.append(norm)
-
-#             #     df_pdf = pd.DataFrame(normalized_records)
-
-#             #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-#             #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
-#             #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
-
-#                 try:
-#                     engine, table_name = insert_excel_to_sql(
-#                         output_pdf_excel,
-#                         exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
-#                     )
-    
-#                     if engine is not None and table_name is not None:
-#                         print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
-
-#                         # ---------------- Add Flags ----------------
-#                         try:
-#                             add_flags(engine, table_name)  # Use dynamic table name
-#                             print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
-#                         except Exception as flag_e:
-#                             print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
-
-#                 except Exception as e:
-#                     print(f"❌ SQL insertion failed: {e}")
-
-#                 # Insert into SQL: DB = Municipality, Table = Ward
-#                 # try:
-#                 #     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-#                 #     print("📥 Data successfully inserted into SQL Server!")
-#                 #     # ---------------- Add Flags ----------------
-#                 #     try:
-#                 #         from sqlalchemy import create_engine
-#                 #         engine = create_engine(connection_string, fast_executemany=True)  # Make sure your connection string is correct
-#                 #         add_flags(engine, "Ward")  # Replace "Ward" with your table name
-#                 #         print("✅ Flags added/updated successfully in SQL table!")
-#                 #     except Exception as flag_e:
-#                 #         print(f"❌ Failed to add/update flags: {flag_e}")
-#                 # except Exception as e:
-#                 #     print(f"❌ SQL insertion failed: {e}")
-
-#                 # Cleanup checkpoint + emergency
-#                 checkpoint = load_checkpoint()
-#                 if pdf_name in checkpoint:
-#                     temp_file = checkpoint[pdf_name].get("temp_excel")
-#                     if temp_file and os.path.exists(temp_file):
-#                         os.remove(temp_file)
-#                         print(f"🗑️ Deleted emergency file for completed PDF: {temp_file}")
-#                     del checkpoint[pdf_name]
-
-#                     if checkpoint:
-#                         with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-#                             json.dump(checkpoint, f, indent=2)
-#                         print(f"✅ Updated checkpoint after finishing {pdf_name}")
-#                     else:
-#                         if os.path.exists(CHECKPOINT_FILE):
-#                             os.remove(CHECKPOINT_FILE)
-#                         print(f"🗑️ Deleted checkpoint file as all PDFs are processed")
-
-#             else:
-#                 print(f"⚠️ No data extracted from {pdf_name}. Skipping file save.")
-
-#             # Timing
-#             elapsed_time = time.time() - start_time
-#             h, rem = divmod(elapsed_time, 3600)
-#             m, s = divmod(rem, 60)
-#             print(f"⏱️ Finished {pdf_name} in {int(h):02d}:{int(m):02d}:{int(s):02d}")
-
-#     except KeyboardInterrupt:
-#         print("\n⚠️ Process interrupted by user! Saving emergency progress...")
-#         save_progress(pdf_voter_details, column_order, temp_excel)
-#         print("💾 Emergency file saved. You can resume later using checkpoint.")
-
-#     except Exception as e:
-#         print(f"\n❌ Unexpected error: {e}")
-#         save_progress(pdf_voter_details, column_order, temp_excel)
-#         print("💾 Emergency file saved due to error.")
-
-#     # Total timing
-#     total_elapsed = time.time() - total_start_time
-#     th, rem = divmod(total_elapsed, 3600)
-#     tm, ts = divmod(rem, 60)
-#     print(f"\n🏁 All files processed in {int(th):02d}:{int(tm):02d}:{int(ts):02d}")
