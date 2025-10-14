@@ -15,9 +15,7 @@ import pandas as pd
 from sqlalchemy import create_engine,text,types
 import logging
 import pyodbc
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
-from fastapi.responses import FileResponse
-import uvicorn
+import difflib
 logging.getLogger("ppocr").setLevel(logging.WARNING)
 
 # --------------------------------------------
@@ -83,7 +81,7 @@ ocr_paddle = PaddleOCR(use_angle_cls=True, lang='en', rec=True, gpu=True, precis
 # ========= Prefix Mapping File =========
 # ----------------------------------------
 prefix_mapping_file = r"D:\Sahil_Tejam\ALL_OCR\Marathi_OCR\Corporation_wise_prefix.xlsx"
-sheet_name = "Dombivali-143"
+sheet_name = "AMC"
 valid_prefixes = set()
 
 try:
@@ -158,7 +156,7 @@ MALE_WORDS   = {"पु"}
 FEMALE_WORDS = {
     "स्री", "स्त्री", "सरी", "झरी", "ख्री", "खरी",
     "ख्तरी", "ख्त्री", "खत्री", "खतरी", "सत्री",
-    "खसत्री", "खस्तरी", "ख्त्रा", "स््री"
+    "खसत्री", "खस्तरी", "ख्त्रा", "स््री","ख््री"
 }
 OTHER_WORDS  = {"इतर", "ईतर", "इ्तर"}
 
@@ -384,7 +382,8 @@ def extract_section_info(text):
 
         if not collecting:
             match = re.search(
-                r"यादी\s*भाग\s*क्र\.?\s*[०-९0-9]+\s*[:\-]\s*([०-९0-9]+)\s*-\s*(.*)",
+                # r"यादी\s*भाग\s*क्र\.?\s*[०-९0-9]+\s*[:\-]\s*([०-९0-9]+)\s*-\s*(.*)",
+                r"यादी\s*भाग\s*क्र\.?\s*[०-९0-9\s]+\s*[:\-]\s*([०-९0-9]+)\s*-\s*(.*)",
                 line_stripped
             )
             if match:
@@ -1097,6 +1096,14 @@ def process_page(pdf_file, page_num, zoom_factor, pdf_header_info):
     for card_index, (x1, y1, x2, y2) in enumerate(card_coords_points, start=1):
         card_img = full_img.crop((x1, y1, x2, y2))
 
+    # ---------------For debugging: save cropped card images---------------
+
+        # output_dir = "cropped_cards"
+        # os.makedirs(output_dir, exist_ok=True)
+        # img_filename = f"page_{page_num}_card_{card_index}.jpg"
+        # img_path = os.path.join(output_dir, img_filename)
+        # card_img.save(img_path)
+
         preprocessed_img = preprocess_image(card_img)
         marathi_text = pytesseract.image_to_string(preprocessed_img, config=tesseract_config).strip()
         if not marathi_text.strip():
@@ -1435,7 +1442,12 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = list(range(1,total_pages))  # all pages
+                pages_to_iterate = [81,
+213,
+268,
+449,
+514
+]  # all pages
 
                 # Resume from checkpoint
                 if pdf_name in checkpoint:
@@ -1453,21 +1465,6 @@ if __name__ == "__main__":
                         pdf_voter_details.extend(page_voters)
                         save_checkpoint(pdf_name, page_num, temp_excel)
 
-                    # Emergency save + checkpoint
-                    # if pdf_voter_details:
-                    #     df_tmp = pd.DataFrame(pdf_voter_details)
-                    #     if column_order:
-                    #         ordered_cols = [col for col in column_order if col in df_tmp.columns]
-                    #         other_cols = [col for col in df_tmp.columns if col not in ordered_cols]
-                    #         df_tmp = df_tmp[ordered_cols + other_cols]
-
-                    #     for col in df_tmp.columns:
-                    #         df_tmp[col] = df_tmp[col].astype(str)
-
-                    #     df_tmp.to_excel(temp_excel, index=False, engine="openpyxl")
-                    #     save_checkpoint(pdf_name, page_num, temp_excel)
-                    #     print(f"💾 Emergency save at page {page_num}: {temp_excel}")
-
             # ---------------- Final Save + SQL Insert ----------------
             if pdf_voter_details:
                 df_pdf = pd.DataFrame(pdf_voter_details)
@@ -1483,50 +1480,22 @@ if __name__ == "__main__":
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
 
-            # if pdf_voter_details:
-            #     # Ensure consistent keys for all rows
-            #     normalized_records = []
-            #     for rec in pdf_voter_details:
-            #         norm = {col: str(rec.get(col, "")) for col in column_order}
-            #         normalized_records.append(norm)
-
-            #     df_pdf = pd.DataFrame(normalized_records)
-
-            #     output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
-            #     df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
-            #     print(f"📄 Saved extracted data to: {output_pdf_excel}")
-
-                try:
-                    engine, table_name = insert_excel_to_sql(
-                        output_pdf_excel,
-                        exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
-                    )
-    
-                    if engine is not None and table_name is not None:
-                        print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
-
-                        # ---------------- Add Flags ----------------
-                        try:
-                            add_flags(engine, table_name)  # Use dynamic table name
-                            print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
-                        except Exception as flag_e:
-                            print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
-
-                except Exception as e:
-                    print(f"❌ SQL insertion failed: {e}")
-
-                # Insert into SQL: DB = Municipality, Table = Ward
                 # try:
-                #     insert_excel_to_sql(output_pdf_excel, exclude_cols=["Marathi_Text", "Paddle_Text","Cleaned_Text", "Raw_Header_Text"])
-                #     print("📥 Data successfully inserted into SQL Server!")
-                #     # ---------------- Add Flags ----------------
-                #     try:
-                #         from sqlalchemy import create_engine
-                #         engine = create_engine(connection_string, fast_executemany=True)  # Make sure your connection string is correct
-                #         add_flags(engine, "Ward")  # Replace "Ward" with your table name
-                #         print("✅ Flags added/updated successfully in SQL table!")
-                #     except Exception as flag_e:
-                #         print(f"❌ Failed to add/update flags: {flag_e}")
+                #     engine, table_name = insert_excel_to_sql(
+                #         output_pdf_excel,
+                #         exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                #     )
+    
+                #     if engine is not None and table_name is not None:
+                #         print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
+
+                #         # ---------------- Add Flags ----------------
+                #         try:
+                #             add_flags(engine, table_name)  # Use dynamic table name
+                #             print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
+                #         except Exception as flag_e:
+                #             print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
+
                 # except Exception as e:
                 #     print(f"❌ SQL insertion failed: {e}")
 
