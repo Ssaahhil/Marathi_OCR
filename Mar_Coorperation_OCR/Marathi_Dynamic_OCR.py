@@ -15,28 +15,18 @@ import pandas as pd
 from sqlalchemy import create_engine,text,types
 import logging
 import pyodbc
-import difflib
+from urllib.parse import quote_plus
 logging.getLogger("ppocr").setLevel(logging.WARNING)
 
 # --------------------------------------------
 # =========== SQL Serve DB Config =============
 # --------------------------------------------
-DB_SERVER = "ORNET91"
 DB_DRIVER = "ODBC Driver 17 for SQL Server"
+DB_SERVER = "workstation2"  # try "ORNET96\\SQLEXPRESS" or "localhost" if needed
+DB_NAME = "Test"
+DB_USER = "sa"
+DB_PASS = "work$pace@02"                # Default database (can be overridden)
 
-DB_USER = "sa"                  # SQL Server username
-DB_PASS = "manager"    # SQL Server password
-DB_NAME = "KBMC"                # Default database (can be overridden)
-TABLE_NAME = "Ward_Unknown" 
-
-# Build connection string (ODBC)
-connection_string = (
-    f"mssql+pyodbc://{DB_USER}:{DB_PASS}@{DB_SERVER}/{DB_NAME}"
-    f"?driver={DB_DRIVER.replace(' ', '+')}"
-)
-
-# Create SQLAlchemy engine with fast_executemany (better for bulk inserts)
-engine = create_engine(connection_string, fast_executemany=True)
 
 # -------------------------------------------
 # =========== CONFIG(WORKSTATION2) ===========
@@ -1176,25 +1166,38 @@ def save_checkpoint(pdf_name, page_num, temp_excel):
     print(f"💾 Checkpoint saved for {pdf_name} at page {page_num}")
 
 
-# ---------------------------------------------------------------
-# ================ SQL Server Insertion Helpers ===============
-# ---------------------------------------------------------------    
-
-# === Create SQLAlchemy Engine ===
+# =========================
+# ✅ CREATE SQL ENGINE
+# =========================
 def get_engine(db_name, user=DB_USER, password=DB_PASS):
     """
     Create SQLAlchemy engine using SQL Server Authentication.
+    (Handles special characters and instance names safely)
     """
-    conn_str = f"mssql+pyodbc://{user}:{password}@{DB_SERVER}/{db_name}?driver=ODBC+Driver+17+for+SQL+Server"
-    return create_engine(conn_str, fast_executemany=True)
+    odbc_str = (
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={DB_SERVER};"
+        f"DATABASE={db_name};"
+        f"UID={user};PWD={password};"
+    )
+    params = quote_plus(odbc_str)
+    engine = create_engine(f"mssql+pyodbc:///?odbc_connect={params}", fast_executemany=True)
+    return engine
 
-# === Ensure Database Exists ===
+
+# =========================
+# ✅ ENSURE DATABASE EXISTS
+# =========================
 def ensure_database_exists(db_name, user=DB_USER, password=DB_PASS):
     """
-    Creates the database if it doesn't exist using raw pyodbc (autocommit=True).
-    Avoids 'CREATE DATABASE inside transaction' error.
+    Creates the database if it doesn't exist using pyodbc.
     """
-    conn_str = f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={DB_SERVER};UID={user};PWD={password};DATABASE=master"
+    conn_str = (
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={DB_SERVER};"
+        f"UID={user};PWD={password};"
+        f"DATABASE=master;"
+    )
     with pyodbc.connect(conn_str, autocommit=True) as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
@@ -1203,7 +1206,10 @@ def ensure_database_exists(db_name, user=DB_USER, password=DB_PASS):
         """)
         print(f"✅ Database ready: {db_name}")
 
-# === Clean + Validate Integer Columns ===
+
+# =========================
+# ✅ INTEGER COLUMN ENFORCER
+# =========================
 def enforce_integer_columns(df, int_cols):
     for col in int_cols:
         if col in df.columns:
@@ -1212,66 +1218,58 @@ def enforce_integer_columns(df, int_cols):
             if bad_mask.any():
                 bad_vals = df[col][bad_mask].unique()
                 raise ValueError(f"❌ Column '{col}' contains non-integer values: {bad_vals}")
-            if not (numeric_series.dropna() == numeric_series.dropna().astype(int)).all():
-                bad_vals = df[col][numeric_series != numeric_series.astype(int)].unique()
-                raise ValueError(f"❌ Column '{col}' contains non-integer decimal values: {bad_vals}")
             df[col] = numeric_series.astype("Int64")
     return df
 
-# === Extract Table Name from Excel/PDF File Name ===
+
+# =========================
+# ✅ TABLE NAME EXTRACTOR
+# =========================
 def extract_table_name(excel_path):
-    """
-    Example: DraftList_Ward_28_KDMC.xlsx -> Ward_28
-    """
     base = os.path.splitext(os.path.basename(excel_path))[0]
     ward_match = re.search(r"Ward[_ ]?(\d+)", base, re.IGNORECASE)
     return f"Ward_{ward_match.group(1)}" if ward_match else "Ward_Unknown"
 
-# === Insert Excel into SQL Server ===
-def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
+
+# =========================
+# ✅ EXCEL → SQL INSERTION
+# =========================
+def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None, table_name=None):
     """
     Reads an Excel file and inserts it into SQL Server.
-    All text columns (Marathi included) are stored as NVARCHAR.
-    Integer columns remain INT.
-    Replaces the table if it already exists.
-    Returns (engine, table_name) for further processing.
     """
     try:
         print(f"📂 Reading Excel file: {excel_path}")
         df = pd.read_excel(excel_path, dtype=str)
 
         if df.empty:
-            print("⚠️ Excel file is empty, nothing to insert.")
+            print("⚠️ Excel file is empty, skipping.")
             return None, None
 
         if exclude_cols:
             df = df.drop(columns=exclude_cols, errors="ignore")
 
-        # Columns that must be integers
-        int_cols = [
-            "New_Voter_ID", "Voter_ID", "Section_No", "List_No",
-            "Page", "Card_Index", "Prabhag_No", "Ac_no", "Age"
-        ]
+        int_cols = ["New_Voter_ID", "Voter_ID", "Section_No", "List_No",
+                    "Page", "Card_Index", "Prabhag_No", "Ac_no", "Age"]
         df = enforce_integer_columns(df, int_cols)
 
-        # Ensure database exists
         ensure_database_exists(db_name)
 
-        # Extract table name
-        table_name = extract_table_name(excel_path)
+        if not table_name:
+            table_name = extract_table_name(excel_path)
 
-        # Connect to database
         engine = get_engine(db_name)
 
-        # Define SQLAlchemy dtype mapping
-        sql_dtype = {}
-        for col in df.columns:
-            if col in int_cols:
-                sql_dtype[col] = types.INTEGER()
-            else:
-                sql_dtype[col] = types.NVARCHAR(length=500)
+        # Validate engine connection
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        print("✅ SQLAlchemy connection verified")
 
-        # Insert into SQL Server (replace table if exists)
+        sql_dtype = {
+            col: types.INTEGER() if col in int_cols else types.NVARCHAR(length=500)
+            for col in df.columns
+        }
+
         df.to_sql(
             table_name,
             engine,
@@ -1287,29 +1285,22 @@ def insert_excel_to_sql(excel_path, db_name=DB_NAME, exclude_cols=None):
         print(f"❌ SQL insertion failed for {excel_path}: {e}")
         return None, None
 
-# === Add Flags ===
-def add_flags(engine, table_name):
-    """Add a Flag column and update values based on rules."""
-    from sqlalchemy.sql import text
 
+# =========================
+# ✅ ADD FLAG LOGIC
+# =========================
+def add_flags(engine, table_name):
     with engine.begin() as conn:
-        # Add Flag column if not exists
         conn.execute(text(f"""
             IF COL_LENGTH('{table_name}', 'Flag') IS NULL
                 ALTER TABLE {table_name} ADD Flag VARCHAR(255);
         """))
 
-
-        # Ensure Missing_Successors column exists
         conn.execute(text(f"""
             IF COL_LENGTH('{table_name}', 'Missing_Successors') IS NULL
-            BEGIN
-                ALTER TABLE {table_name}
-                ADD Missing_Successors INT NULL;
-            END
+                ALTER TABLE {table_name} ADD Missing_Successors INT NULL;
         """))
 
-        # Update Missing_Successors
         conn.execute(text(f"""
         ;WITH Sorted AS (
             SELECT New_Voter_ID,
@@ -1323,11 +1314,9 @@ def add_flags(engine, table_name):
                                     ELSE 0
                                   END
         FROM {table_name} t
-        JOIN Sorted s
-          ON t.New_Voter_ID = s.New_Voter_ID;
+        JOIN Sorted s ON t.New_Voter_ID = s.New_Voter_ID;
         """))
 
-        # Update Flag column for all other rules
         conn.execute(text(f"""
         UPDATE {table_name}
         SET Flag = NULLIF(
@@ -1343,7 +1332,6 @@ def add_flags(engine, table_name):
         );
         """))
 
-        # ✅ Add DUPLICATE_VID to Flag where New_Voter_ID occurs more than once
         conn.execute(text(f"""
         ;WITH Duplicates AS (
             SELECT New_Voter_ID
@@ -1355,13 +1343,14 @@ def add_flags(engine, table_name):
         SET Flag = 
             CASE 
                 WHEN Flag IS NULL THEN 'DUPLICATE_VID'
-                ELSE Flag + ',DUPLICATE_VID'
+                ELSE CONCAT(Flag, ',DUPLICATE_VID')
             END
         FROM {table_name} t
         JOIN Duplicates d ON t.New_Voter_ID = d.New_Voter_ID;
         """))
 
-        print(f"✅ Flags updated in table '{table_name}'")
+        print(f"✅ Flags updated for table '{table_name}'")
+
 
 
 # ============ Main Execution (with Sepearte excel file Save) ================
@@ -1442,12 +1431,7 @@ if __name__ == "__main__":
             # ---------------- Process Pages ----------------
             with fitz.open(pdf_file) as doc:
                 total_pages = len(doc)
-                pages_to_iterate = [81,
-213,
-268,
-449,
-514
-]  # all pages
+                pages_to_iterate = list(range(1,4)) # all pages
 
                 # Resume from checkpoint
                 if pdf_name in checkpoint:
@@ -1479,6 +1463,32 @@ if __name__ == "__main__":
                 output_pdf_excel = os.path.join(os.path.dirname(output_excel), f"{pdf_name}.xlsx")
                 df_pdf.to_excel(output_pdf_excel, index=False, engine="openpyxl")
                 print(f"📄 Saved extracted data to: {output_pdf_excel}")
+                try:
+                    print(f"🚀 Attempting SQL insertion for: {output_pdf_excel}")
+
+                    engine, table_name = insert_excel_to_sql(
+                        output_pdf_excel,
+                        exclude_cols=["Marathi_Text", "Paddle_Text", "Cleaned_Text", "Raw_Header_Text"]
+                    )
+
+                    if engine is not None and table_name is not None:
+                        print(f"📥 Data successfully inserted into SQL Server table '{table_name}'!")
+
+        # ---------------- Add Flags ----------------
+                        try:
+                            add_flags(engine, table_name)
+                            print(f"✅ Flags added/updated successfully in SQL table '{table_name}'!")
+                        except Exception as flag_e:
+                            print(f"❌ Failed to add/update flags for '{table_name}': {flag_e}")
+                    else:
+                        print("⚠️ Engine or table name is None. SQL insertion may have failed earlier.")
+
+                except pyodbc.InterfaceError as conn_err:
+                    print(f"❌ [Connection Error] Could not reach SQL Server: {conn_err}")
+                except pyodbc.OperationalError as op_err:
+                    print(f"❌ [Operational Error] Check SQL instance, credentials, or network: {op_err}")
+                except Exception as e:
+                    print(f"❌ [General Error] SQL insertion failed: {e}")
 
                 # try:
                 #     engine, table_name = insert_excel_to_sql(
